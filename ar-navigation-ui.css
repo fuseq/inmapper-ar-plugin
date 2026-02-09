@@ -1,0 +1,263 @@
+/**
+ * ARNavigationUI - Harici Stil Dosyası (Opsiyonel)
+ * 
+ * Bu dosya ARNavigationUI bileşeninin stillerini içerir.
+ * Stiller varsayılan olarak JS tarafından otomatik inject edilir.
+ * 
+ * Bu dosyayı kullanmak için:
+ * 1. HTML'de bu CSS'i <link> ile dahil edin
+ * 2. <style> tag'ine id="arn-styles" ekleyin (otomatik inject'i engeller)
+ * 
+ * Örnek:
+ *   <link rel="stylesheet" href="ar-navigation-ui.css" id="arn-styles">
+ * 
+ * Özelleştirme:
+ *   Bu dosyayı kopyalayıp istediğiniz değişiklikleri yapabilirsiniz.
+ *   id="arn-styles" olduğu sürece JS kendi stillerini inject etmez.
+ */
+
+/* ===== ROOT CONTAINER ===== */
+.arn-root {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 9000;
+    overflow: hidden;
+    background: #000;
+    display: none;
+}
+
+.arn-root.arn-active {
+    display: block;
+}
+
+/* ===== CAMERA VIDEO ===== */
+.arn-camera {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 0;
+}
+
+/* ===== YÖN OKLARI ===== */
+.arn-arrow {
+    position: fixed;
+    top: 33%;
+    transform: translateY(-50%);
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    z-index: 9010;
+    pointer-events: none;
+}
+
+.arn-arrow.arn-visible {
+    opacity: 1;
+}
+
+.arn-arrow.arn-left {
+    left: 25px;
+}
+
+.arn-arrow.arn-right {
+    right: 25px;
+}
+
+.arn-arrow.arn-up {
+    left: 50%;
+    transform: translate(-50%, -50%) scale(1.5);
+}
+
+.arn-arrow.arn-up-perspective {
+    left: 50%;
+    transform: translate(-50%, -50%) scale(1.2);
+}
+
+/* Ok ikon boyutu (resim kullanıldığında) */
+.arn-arrow-icon {
+    width: 60px;
+    height: auto;
+}
+
+/* SVG ok gölgesi */
+.arn-arrow svg {
+    filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.5));
+}
+
+/* ===== OK ANİMASYONLARI ===== */
+.arn-anim-left {
+    animation: arnMoveLeft 1.5s ease-in-out infinite;
+}
+
+@keyframes arnMoveLeft {
+    0%, 100% { transform: translateX(0); }
+    50% { transform: translateX(-25px); }
+}
+
+.arn-anim-right {
+    animation: arnMoveRight 1.5s ease-in-out infinite;
+}
+
+@keyframes arnMoveRight {
+    0%, 100% { transform: translateX(0); }
+    50% { transform: translateX(25px); }
+}
+
+.arn-anim-forward {
+    animation: arnJump 1s ease infinite;
+}
+
+@keyframes arnJump {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+}
+
+.arn-anim-forwardPerspective {
+    animation: arnJumpSmall 1.2s ease infinite;
+}
+
+@keyframes arnJumpSmall {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-5px); }
+}
+
+/* ===== YÜKLENİYOR EKRANI ===== */
+.arn-loading {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.7);
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 9020;
+}
+
+.arn-loading.arn-show {
+    display: flex;
+}
+
+.arn-loading-img {
+    width: 100px;
+    height: 100px;
+    object-fit: contain;
+}
+
+.arn-loading-text {
+    color: white;
+    font-size: 16px;
+    font-weight: 500;
+    margin-top: 16px;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.arn-loading-spinner {
+    width: 50px;
+    height: 50px;
+    border: 4px solid rgba(255, 255, 255, 0.3);
+    border-top: 4px solid white;
+    border-radius: 50%;
+    animation: arnSpin 1s linear infinite;
+}
+
+@keyframes arnSpin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* ===== İLERLEME DAİRESİ ===== */
+.arn-progress {
+    position: fixed;
+    top: 25%;
+    left: 50%;
+    transform: translateX(-50%) scale(0.5);
+    width: 100px;
+    height: 100px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    transition: transform 1s ease;
+    z-index: 9010;
+    pointer-events: none;
+}
+
+.arn-progress.arn-grow {
+    transform: translateX(-50%) scale(1);
+}
+
+.arn-progress-svg {
+    transform: rotate(-90deg);
+}
+
+.arn-progress-bar {
+    stroke-dasharray: 283;
+    stroke-dashoffset: 283;
+    /* transition süresi JS tarafından ayarlanır */
+}
+
+/* ===== TAMAMLANMA POPUP ===== */
+.arn-popup {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    z-index: 9999;
+    display: none;
+    justify-content: center;
+    align-items: center;
+}
+
+.arn-popup.arn-show {
+    display: flex;
+}
+
+.arn-popup-content {
+    text-align: center;
+    padding: 40px;
+}
+
+.arn-popup-icon {
+    font-size: 80px;
+    margin-bottom: 20px;
+}
+
+.arn-popup-img {
+    width: 120px;
+    height: 120px;
+    object-fit: contain;
+}
+
+.arn-popup-message {
+    font-size: 20px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 30px;
+}
+
+.arn-popup-btn {
+    padding: 12px 30px;
+    border: none;
+    border-radius: 25px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    background: linear-gradient(135deg, #7daef1, #5c9de8);
+    color: white;
+    min-width: 150px;
+    transition: transform 0.1s;
+}
+
+.arn-popup-btn:active {
+    transform: scale(0.96);
+}
+
