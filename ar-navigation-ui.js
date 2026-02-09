@@ -349,6 +349,10 @@ class ARNavigationUI {
         this._compassWk = null;
         this._rafId = null;
         this._destroyed = false;
+        this._hasAbsoluteSource = false;
+        this._headingBuffer = [];
+        this._lastRawHeading = null;
+        this._jumpRejectCount = 0;
 
         // Başlat
         ARNavigationUI._ensureStyles();
@@ -616,22 +620,69 @@ class ARNavigationUI {
     //  PRIVATE: PUSULA (DeviceOrientation)
     // ================================================================
 
+    /**
+     * W3C rotation matrix yöntemiyle absolute pusula açısı hesaplar.
+     * Telefon hangi açıda tutulursa tutulsun (dikey, yatay, eğik)
+     * daima doğru kuzeyi referans alan heading döndürür.
+     *
+     * @param {number} alpha - DeviceOrientation alpha (0-360)
+     * @param {number} beta  - DeviceOrientation beta (-180..180)
+     * @param {number} gamma - DeviceOrientation gamma (-90..90)
+     * @returns {number} 0-360 derece pusula açısı (0=Kuzey, saat yönünde)
+     */
+    static _computeHeadingFromRotationMatrix(alpha, beta, gamma) {
+        const degToRad = Math.PI / 180;
+        const alphaRad = alpha * degToRad;
+        const betaRad  = beta  * degToRad;
+        const gammaRad = gamma * degToRad;
+
+        // Rotation matrix bileşenleri
+        const cA = Math.cos(alphaRad);
+        const sA = Math.sin(alphaRad);
+        const cB = Math.cos(betaRad);
+        const sB = Math.sin(betaRad);
+        const cG = Math.cos(gammaRad);
+        const sG = Math.sin(gammaRad);
+
+        // Kuzey vektörünün cihaz ekranına projeksiyonu
+        const rA = -cA * sG - sA * sB * cG;
+        const rB = -sA * sG + cA * sB * cG;
+
+        // atan2 ile pusula açısı (radyan → derece, 0-360 aralığında)
+        let compassHeading = Math.atan2(rA, rB) * (180 / Math.PI);
+        if (compassHeading < 0) compassHeading += 360;
+
+        return compassHeading;
+    }
+
     _startCompass() {
         if (!window.DeviceOrientationEvent) {
             this._emitError('DeviceOrientation API desteklenmiyor');
             return;
         }
 
-        // Android: tilt-kompanzasyonlu pusula
+        // Hangi kaynaktan veri geldiğini takip et
+        this._hasAbsoluteSource = false;
+        this._headingBuffer = [];  // Smoothing için son heading değerleri
+
+        // Android: absolute orientation (rotation matrix ile hesapla)
         this._compassAbs = (e) => {
-            if (!e.absolute || e.alpha == null || e.beta == null || e.gamma == null) return;
-            let heading = -(e.alpha + e.beta * e.gamma / 90);
-            heading -= Math.floor(heading / 360) * 360;
+            if (e.alpha == null || e.beta == null || e.gamma == null) return;
+
+            // absolute event geldiğinde bunu birincil kaynak olarak işaretle
+            this._hasAbsoluteSource = true;
+
+            const heading = ARNavigationUI._computeHeadingFromRotationMatrix(
+                e.alpha, e.beta, e.gamma
+            );
             this._handleCompass(heading, e.beta);
         };
 
-        // iOS: webkit pusula
+        // iOS: webkitCompassHeading (zaten tilt-kompanzasyonlu absolute değer)
         this._compassWk = (e) => {
+            // Eğer absolute kaynak aktifse webkit'i yoksay (çakışma önleme)
+            if (this._hasAbsoluteSource) return;
+
             if (e.webkitCompassHeading != null && !isNaN(e.webkitCompassHeading)) {
                 this._handleCompass(e.webkitCompassHeading, e.beta || 90);
             }
@@ -673,9 +724,91 @@ class ARNavigationUI {
             cancelAnimationFrame(this._rafId);
             this._rafId = null;
         }
+        this._headingBuffer = [];
+        this._lastRawHeading = null;
+        this._jumpRejectCount = 0;
     }
 
-    _handleCompass(heading, beta) {
+    /**
+     * Gimbal Lock korumalı heading smoothing.
+     *
+     * Gimbal Lock: Euler açılarında beta ≈ ±90° olduğunda alpha ve gamma
+     * eksenleri çakışır, sensör verileri anlık 180° sıçrar. Bu metod:
+     *
+     * 1. Jump Rejection  — Gimbal bölgesinde ani büyük sıçramaları reddeder,
+     *    gerçek yön değişikliğini (ardışık tutarlı okuma) ise kabul eder.
+     * 2. Adaptive Buffer — Gimbal bölgesinde smoothing buffer'ını büyütür,
+     *    normal bölgede küçük tutar (tepki hızı için).
+     * 3. Circular Mean   — 0°/360° geçişinde doğru ortalama alır.
+     *
+     * @param {number} rawHeading - Ham heading değeri (0-360)
+     * @param {number} beta       - Cihaz beta açısı (eğim)
+     * @returns {number} Kararlı heading (0-360)
+     */
+    _smoothHeading(rawHeading, beta) {
+        // ── Gimbal Lock bölgesi tespiti ──
+        // beta=90° civarı (±GIMBAL_LOCK_ZONE) tehlike bölgesi
+        const GIMBAL_LOCK_ZONE = 15;     // derece (90° ± bu değer)
+        const BUFFER_NORMAL    = 5;      // normal smoothing penceresi
+        const BUFFER_GIMBAL    = 12;     // gimbal bölgesinde daha ağır smoothing
+        const MAX_JUMP_NORMAL  = 90;     // normal bölgede izin verilen max sıçrama
+        const MAX_JUMP_GIMBAL  = 30;     // gimbal bölgesinde çok daha katı
+        const REJECT_THRESHOLD_NORMAL = 3;  // kaç ardışık reject sonrası kabul et
+        const REJECT_THRESHOLD_GIMBAL = 10; // gimbal bölgesinde daha sabırlı
+
+        const betaFromVertical = Math.abs((beta || 0) - 90);
+        const inGimbalZone = betaFromVertical < GIMBAL_LOCK_ZONE;
+
+        const maxJump = inGimbalZone ? MAX_JUMP_GIMBAL : MAX_JUMP_NORMAL;
+        const bufferSize = inGimbalZone ? BUFFER_GIMBAL : BUFFER_NORMAL;
+        const rejectThreshold = inGimbalZone
+            ? REJECT_THRESHOLD_GIMBAL
+            : REJECT_THRESHOLD_NORMAL;
+
+        // ── Jump Rejection ──
+        // Önceki ham heading'e göre açısal fark hesapla
+        if (this._lastRawHeading !== null) {
+            const diff = Math.abs(
+                ((rawHeading - this._lastRawHeading + 180) % 360 + 360) % 360 - 180
+            );
+
+            if (diff > maxJump) {
+                this._jumpRejectCount++;
+                // Belirli sayıda ardışık reject → gerçek yön değişikliği, kabul et
+                if (this._jumpRejectCount < rejectThreshold) {
+                    // Sıçramayı reddet, mevcut kararlı heading'i döndür
+                    return this._currentHeading || rawHeading;
+                }
+                // Eşik aşıldı: buffer'ı temizle, yeni yönü kabul et
+                this._headingBuffer = [];
+            } else {
+                this._jumpRejectCount = 0;
+            }
+        }
+
+        this._lastRawHeading = rawHeading;
+
+        // ── Adaptive Buffer ──
+        this._headingBuffer.push(rawHeading);
+        while (this._headingBuffer.length > bufferSize) {
+            this._headingBuffer.shift();
+        }
+
+        // ── Circular Mean (sin/cos yöntemi) ──
+        // 0°/360° geçişinde yanlış ortalama almaz
+        const degToRad = Math.PI / 180;
+        let sinSum = 0, cosSum = 0;
+        for (const h of this._headingBuffer) {
+            sinSum += Math.sin(h * degToRad);
+            cosSum += Math.cos(h * degToRad);
+        }
+        let avg = Math.atan2(sinSum, cosSum) * (180 / Math.PI);
+        if (avg < 0) avg += 360;
+
+        return avg;
+    }
+
+    _handleCompass(rawHeading, beta) {
         if (!this._running || this._completed) return;
 
         // İlk pusula verisi geldiğinde loading'i gizle
@@ -683,6 +816,9 @@ class ARNavigationUI {
             this._compassReady = true;
             this._els.loading.classList.remove('arn-show');
         }
+
+        // Gimbal lock korumalı smoothing uygula
+        const heading = this._smoothHeading(rawHeading, beta);
 
         this._currentHeading = heading;
         this._currentBeta = beta;
