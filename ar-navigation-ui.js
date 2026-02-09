@@ -349,6 +349,7 @@ class ARNavigationUI {
         this._compassWk = null;
         this._rafId = null;
         this._destroyed = false;
+        this._compassActive = false;
         this._hasAbsoluteSource = false;
         this._headingBuffer = [];
         this._lastRawHeading = null;
@@ -397,7 +398,10 @@ class ARNavigationUI {
     }
 
     /**
-     * AR navigasyonu başlatır: kamera açılır, pusula dinlenir, oklar gösterilir
+     * AR navigasyonu başlatır: kamera açılır, pusula dinlenir, oklar gösterilir.
+     * Aynı instance üzerinde birden fazla kez çağrılabilir (stop sonrası tekrar start).
+     * Pusula listener'ları instance ömrü boyunca canlı tutulur — bu sayede
+     * sensör referans çerçevesi korunur ve her start'ta tutarlı heading elde edilir.
      * @returns {Promise<void>}
      */
     async start() {
@@ -410,33 +414,40 @@ class ARNavigationUI {
         this._running = true;
         this._completed = false;
         this._aligned = false;
-        this._compassReady = false;
 
         // Root'u göster
         this._els.root.classList.add('arn-active');
 
-        // Loading ekranını göster
-        this._els.loading.classList.add('arn-show');
+        // Pusula zaten aktifse loading'i kısa tut, değilse ilk kez başlat
+        if (this._compassActive) {
+            // Pusula zaten çalışıyor, heading güncel — loading gereksiz
+            this._compassReady = true;
+        } else {
+            // İlk başlatma: pusula henüz aktif değil, loading göster
+            this._compassReady = false;
+            this._els.loading.classList.add('arn-show');
+            this._startCompass();
+        }
 
         // Kamera başlat
         if (this.manageCamera) {
             await this._startCamera();
         }
 
-        // Pusula dinlemeye başla
-        this._startCompass();
-
         if (this.onStart) this.onStart();
     }
 
     /**
-     * AR navigasyonu durdurur: kamera kapatılır, pusula dinlemesi biter, UI gizlenir
+     * AR navigasyonu durdurur: kamera kapatılır, UI gizlenir.
+     * Pusula listener'ları KALDIRILMAZ — sensör referans çerçevesini korumak için
+     * arka planda heading takibi devam eder. Sadece destroy() pusulayı durdurur.
      */
     stop() {
         if (!this._running) return;
         this._running = false;
 
-        this._stopCompass();
+        // ❗ Pusula DURDURULMAZ — referans çerçevesi korunur
+        // Heading arka planda güncellenmeye devam eder (_handleCompass içinde)
         this._stopCamera();
         this._hideAllArrows();
         this._resetProgress();
@@ -449,11 +460,12 @@ class ARNavigationUI {
     }
 
     /**
-     * Bileşeni tamamen kaldırır. stop() çağrılır ve DOM temizlenir.
+     * Bileşeni tamamen kaldırır. stop() + pusula durdurma + DOM temizleme.
      * Bu çağrıdan sonra instance tekrar kullanılamaz.
      */
     destroy() {
         this.stop();
+        this._stopCompass(); // Pusula SADECE destroy'da durdurulur
         if (this._els.root && this._els.root.parentNode) {
             this._els.root.parentNode.removeChild(this._els.root);
         }
@@ -656,6 +668,9 @@ class ARNavigationUI {
     }
 
     _startCompass() {
+        // Zaten aktifse tekrar başlatma (referans çerçevesini koru)
+        if (this._compassActive) return;
+
         if (!window.DeviceOrientationEvent) {
             this._emitError('DeviceOrientation API desteklenmiyor');
             return;
@@ -691,6 +706,7 @@ class ARNavigationUI {
         const addListeners = () => {
             window.addEventListener('deviceorientationabsolute', this._compassAbs, true);
             window.addEventListener('deviceorientation', this._compassWk, true);
+            this._compassActive = true;
         };
 
         // iOS izin kontrolü
@@ -724,6 +740,7 @@ class ARNavigationUI {
             cancelAnimationFrame(this._rafId);
             this._rafId = null;
         }
+        this._compassActive = false;
         this._headingBuffer = [];
         this._lastRawHeading = null;
         this._jumpRejectCount = 0;
@@ -809,6 +826,14 @@ class ARNavigationUI {
     }
 
     _handleCompass(rawHeading, beta) {
+        // ── HER ZAMAN heading'i güncelle (stop durumunda bile) ──
+        // Sensör referans çerçevesi canlı tutulur, tekrar start'ta
+        // heading zaten güncel ve kararlıdır.
+        const heading = this._smoothHeading(rawHeading, beta);
+        this._currentHeading = heading;
+        this._currentBeta = beta;
+
+        // ── Navigasyon aktif değilse sadece heading takibi yap ──
         if (!this._running || this._completed) return;
 
         // İlk pusula verisi geldiğinde loading'i gizle
@@ -816,12 +841,6 @@ class ARNavigationUI {
             this._compassReady = true;
             this._els.loading.classList.remove('arn-show');
         }
-
-        // Gimbal lock korumalı smoothing uygula
-        const heading = this._smoothHeading(rawHeading, beta);
-
-        this._currentHeading = heading;
-        this._currentBeta = beta;
 
         // Callback
         if (this.onCompassUpdate) {

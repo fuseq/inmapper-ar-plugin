@@ -264,59 +264,58 @@ nav.start();</div>
         btnStart.addEventListener('click', () => {
             if (!calculatedDirection) return;
 
-            // Önceki instance varsa temizle
             if (navigation) {
-                navigation.destroy();
-                navigation = null;
+                // Mevcut instance'ı yeniden kullan — pusula referans çerçevesi korunur
+                navigation.setTargetAngle(calculatedDirection.compassAngle);
+            } else {
+                // İlk kez: yeni instance oluştur
+                navigation = new ARNavigationUI({
+                    targetAngle: calculatedDirection.compassAngle,
+                    tolerance: 20,
+                    progressDuration: 3,
+                    showPopup: true,
+                    popupMessage: 'Hedefe ulaştınız!',
+                    popupButtonText: 'Tamam',
+
+                    arrowImages: {
+                        left: './assets/left_arrow.png',
+                        right: './assets/right_arrow.png',
+                        forward: './assets/ileri.png',
+                        forwardPerspective: './assets/ileri_perspective.png'
+                    },
+
+                    popupImage: './assets/check.png',
+                    loadingImage: './assets/location.gif',
+
+                    onCompassUpdate: (data) => {
+                        elCompass.textContent = `${data.heading.toFixed(0)}°`;
+                    },
+
+                    onAligned: () => {
+                        elStatus.textContent = 'Doğru yöne bakıyorsunuz ✓';
+                    },
+
+                    onMisaligned: () => {
+                        elStatus.textContent = 'Yönünüzü düzeltin...';
+                    },
+
+                    onCompleted: () => {
+                        elStatus.textContent = 'Hedefe ulaşıldı! ✅';
+                    },
+
+                    onPopupDismiss: () => {
+                        // Popup kapatıldığında UI'ı sıfırla
+                        // ❗ navigation = null YAPMA — instance yeniden kullanılacak
+                        btnStart.classList.remove('hidden');
+                        btnStop.classList.add('hidden');
+                        elStatus.textContent = 'Tamamlandı';
+                    },
+
+                    onError: (err) => {
+                        elStatus.textContent = 'Hata: ' + err;
+                    }
+                });
             }
-
-            // 2. AR Navigasyon UI (ARNavigationUI - kamera + oklar + progress)
-            navigation = new ARNavigationUI({
-                targetAngle: calculatedDirection.compassAngle,
-                tolerance: 20,
-                progressDuration: 3,
-                showPopup: true,
-                popupMessage: 'Hedefe ulaştınız!',
-                popupButtonText: 'Tamam',
-
-                arrowImages: {
-                    left: './assets/left_arrow.png',
-                    right: './assets/right_arrow.png',
-                    forward: './assets/ileri.png',
-                    forwardPerspective: './assets/ileri_perspective.png'
-                },
-
-                popupImage: './assets/check.png',
-                loadingImage: './assets/location.gif',
-
-                onCompassUpdate: (data) => {
-                    elCompass.textContent = `${data.heading.toFixed(0)}°`;
-                },
-
-                onAligned: () => {
-                    elStatus.textContent = 'Doğru yöne bakıyorsunuz ✓';
-                },
-
-                onMisaligned: () => {
-                    elStatus.textContent = 'Yönünüzü düzeltin...';
-                },
-
-                onCompleted: () => {
-                    elStatus.textContent = 'Hedefe ulaşıldı! ✅';
-                },
-
-                onPopupDismiss: () => {
-                    // Popup kapatıldığında UI'ı sıfırla
-                    btnStart.classList.remove('hidden');
-                    btnStop.classList.add('hidden');
-                    elStatus.textContent = 'Tamamlandı';
-                    navigation = null;
-                },
-
-                onError: (err) => {
-                    elStatus.textContent = 'Hata: ' + err;
-                }
-            });
 
             navigation.start();
 
@@ -329,8 +328,7 @@ nav.start();</div>
         // ==================== DURDUR ====================
         btnStop.addEventListener('click', () => {
             if (navigation) {
-                navigation.destroy();
-                navigation = null;
+                navigation.stop(); // destroy() DEĞİL — pusula canlı kalır
             }
             btnStart.classList.remove('hidden');
             btnStop.classList.add('hidden');
