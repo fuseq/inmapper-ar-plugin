@@ -136,6 +136,10 @@
                 <span class="value" id="compass">-</span>
             </div>
             <div class="info-row">
+                <span class="label">Kaynak:</span>
+                <span class="value" id="compassSource">-</span>
+            </div>
+            <div class="info-row">
                 <span class="label">Kalibrasyon:</span>
                 <span class="value" id="calibration">-</span>
             </div>
@@ -208,6 +212,7 @@ nav.start();
         const elTarget = document.getElementById('target');
         const elCompass = document.getElementById('compass');
         const elCalibration = document.getElementById('calibration');
+        const elCompassSource = document.getElementById('compassSource');
         const btnStart = document.getElementById('btnStart');
         const btnStop = document.getElementById('btnStop');
 
@@ -293,6 +298,15 @@ nav.start();
 
                     onCompassUpdate: (data) => {
                         elCompass.textContent = `${data.heading.toFixed(0)}°`;
+                        const sourceLabels = {
+                            'sensor-api': '🟢 Sensor API',
+                            'absolute-event': '🟢 Absolute Event',
+                            'webkit-compass': '🟢 WebKit Compass',
+                            'absolute-flag': '🟡 Absolute Flag',
+                            'fallback-rotation': '🔴 Fallback',
+                            'none': '⚫ Yok'
+                        };
+                        elCompassSource.textContent = sourceLabels[data.source] || data.source;
                     },
 
                     onAligned: () => {

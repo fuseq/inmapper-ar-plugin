@@ -558,6 +558,12 @@ class ARNavigationUI {
         this._lastRawHeading = null;
         this._jumpRejectCount = 0;
 
+        // Pusula kaynak takibi
+        // 'none' | 'absolute-event' | 'webkit-compass' | 'absolute-flag' | 'sensor-api'
+        this._compassSource = 'none';
+        this._compassTimeout = null;
+        this._orientationSensor = null; // AbsoluteOrientationSensor (Generic Sensor API)
+
         // Kalibrasyon kapısı: 'none' | 'waiting' | 'blocking' | 'passed'
         // 'waiting'  → warmup verisi bekleniyor
         // 'blocking' → kalibrasyon kötü, overlay gösterildi, navigasyon engelli
@@ -593,6 +599,9 @@ class ARNavigationUI {
 
     /** Mevcut pusula açısı */
     get currentHeading() { return this._currentHeading; }
+
+    /** Aktif pusula kaynağı ('absolute-event' | 'webkit-compass' | 'absolute-flag' | 'sensor-api' | 'fallback-rotation' | 'none') */
+    get compassSource() { return this._compassSource; }
 
     /**
      * Hedef açıyı günceller (çalışırken de çağrılabilir)
@@ -962,14 +971,21 @@ class ARNavigationUI {
 
         // Hangi kaynaktan veri geldiğini takip et
         this._hasAbsoluteSource = false;
+        this._compassSource = 'none';
         this._headingBuffer = [];  // Smoothing için son heading değerleri
 
-        // Android: absolute orientation (rotation matrix ile hesapla)
+        // ══════════════════════════════════════════════════════
+        //  KAYNAK 1: deviceorientationabsolute (Chrome Android)
+        //  En güvenilir kaynak: tarayıcı absolute garanti eder.
+        //  e.absolute === false ise event göreceli → yoksay.
+        // ══════════════════════════════════════════════════════
         this._compassAbs = (e) => {
+            // Bazı tarayıcılar bu eventi göreceli değerlerle ateşler
+            if (e.absolute === false) return;
             if (e.alpha == null || e.beta == null || e.gamma == null) return;
 
-            // absolute event geldiğinde bunu birincil kaynak olarak işaretle
             this._hasAbsoluteSource = true;
+            this._compassSource = 'absolute-event';
 
             const heading = ARNavigationUI._computeHeadingFromRotationMatrix(
                 e.alpha, e.beta, e.gamma
@@ -977,13 +993,46 @@ class ARNavigationUI {
             this._handleCompass(heading, e.beta);
         };
 
-        // iOS: webkitCompassHeading (zaten tilt-kompanzasyonlu absolute değer)
+        // ══════════════════════════════════════════════════════
+        //  KAYNAK 2: deviceorientation (iOS + Firefox fallback)
+        //  Öncelik: webkitCompassHeading > e.absolute=true > son çare
+        // ══════════════════════════════════════════════════════
         this._compassWk = (e) => {
-            // Eğer absolute kaynak aktifse webkit'i yoksay (çakışma önleme)
+            // Absolute kaynak zaten aktifse → çakışma önle
             if (this._hasAbsoluteSource) return;
 
+            // ── iOS: webkitCompassHeading (tilt-kompanzasyonlu, absolute) ──
             if (e.webkitCompassHeading != null && !isNaN(e.webkitCompassHeading)) {
+                this._compassSource = 'webkit-compass';
                 this._handleCompass(e.webkitCompassHeading, e.beta || 90);
+                return;
+            }
+
+            // ── Firefox / bazı Android tarayıcılar: e.absolute === true ──
+            if (e.absolute === true && e.alpha != null && e.beta != null && e.gamma != null) {
+                this._compassSource = 'absolute-flag';
+                const heading = ARNavigationUI._computeHeadingFromRotationMatrix(
+                    e.alpha, e.beta, e.gamma
+                );
+                this._handleCompass(heading, e.beta);
+                return;
+            }
+
+            // ── Son çare: 5s timeout sonrası göreceli rotasyon matrisi ──
+            // deviceorientationabsolute hiç ateşlenmediyse ve başka kaynak yoksa,
+            // deviceorientation alpha değerini rotation matrix ile kullan.
+            // Bu değer bazı tarayıcılarda absolute olmayabilir — uyarı gösterilir.
+            if (this._compassFallbackEnabled && e.alpha != null && e.beta != null && e.gamma != null) {
+                if (this._compassSource === 'none') {
+                    this._compassSource = 'fallback-rotation';
+                    console.warn('ARNavigationUI: Absolute pusula bulunamadı, ' +
+                        'deviceorientation rotation matrix fallback kullanılıyor — ' +
+                        'yön doğruluğu garanti edilemez');
+                }
+                const heading = ARNavigationUI._computeHeadingFromRotationMatrix(
+                    e.alpha, e.beta, e.gamma
+                );
+                this._handleCompass(heading, e.beta);
             }
         };
 
@@ -994,6 +1043,26 @@ class ARNavigationUI {
 
             // Kalibrasyon izlemeyi başlat
             this._startCalibrationMonitor();
+
+            // ── Generic Sensor API: AbsoluteOrientationSensor ──
+            // deviceorientationabsolute'den daha güvenilir (quaternion tabanlı).
+            // Destekleniyorsa birincil kaynak olarak devralır.
+            this._tryAbsoluteOrientationSensor();
+
+            // ── Timeout: 5s içinde absolute kaynak bulunamazsa fallback aç ──
+            this._compassFallbackEnabled = false;
+            this._compassTimeout = setTimeout(() => {
+                if (this._compassSource === 'none') {
+                    console.warn('ARNavigationUI: 5s içinde absolute pusula verisi alınamadı');
+                    this._compassFallbackEnabled = true;
+                    // Hâlâ veri gelmezse hata yayınla
+                    setTimeout(() => {
+                        if (this._compassSource === 'none') {
+                            this._emitError('Pusula verisi alınamıyor — cihaz sensörleri kontrol edin');
+                        }
+                    }, 3000);
+                }
+            }, 5000);
         };
 
         // iOS izin kontrolü
@@ -1014,6 +1083,60 @@ class ARNavigationUI {
         }
     }
 
+    /**
+     * Generic Sensor API — AbsoluteOrientationSensor
+     * Quaternion tabanlı absolute yön sensörü.
+     * deviceorientationabsolute'den daha güvenilir (sensor fusion, gyro+accel+mag).
+     * Destekleniyorsa birincil kaynak olarak kullanılır.
+     */
+    _tryAbsoluteOrientationSensor() {
+        if (!('AbsoluteOrientationSensor' in window)) return;
+
+        try {
+            const sensor = new AbsoluteOrientationSensor({ frequency: 30 });
+
+            sensor.addEventListener('reading', () => {
+                const [qx, qy, qz, qw] = sensor.quaternion;
+
+                // ── Quaternion → Heading ──
+                // Cihazın -Z ekseni (kamera yönü) dünya koordinat sistemine dönüştürülür.
+                // Earth frame: X=Doğu, Y=Kuzey, Z=Yukarı
+                // Rotation matrix R sütun 2 (Z ekseni): R * (0,0,-1) = (-R02, -R12, -R22)
+                const R02 = 2 * (qx * qz + qw * qy);
+                const R12 = 2 * (qy * qz - qw * qx);
+
+                // Yatay düzleme projeksiyon
+                const projEast  = -R02;
+                const projNorth = -R12;
+
+                let heading = Math.atan2(projEast, projNorth) * (180 / Math.PI);
+                if (heading < 0) heading += 360;
+
+                // Beta tahmini: cihaz eğim açısı
+                const R22 = 1 - 2 * (qx * qx + qy * qy);
+                const R21 = 2 * (qy * qz + qw * qx);
+                const beta = Math.atan2(R21, R22) * (180 / Math.PI);
+
+                // Sensor API'yi birincil kaynak olarak işaretle
+                this._hasAbsoluteSource = true;
+                this._compassSource = 'sensor-api';
+                this._handleCompass(heading, beta);
+            });
+
+            sensor.addEventListener('error', (e) => {
+                console.warn('ARNavigationUI: AbsoluteOrientationSensor hatası -', e.error.message);
+                // Sensor API çalışmazsa diğer kaynaklara devam et
+            });
+
+            sensor.start();
+            this._orientationSensor = sensor;
+
+        } catch (e) {
+            // İzin yok veya desteklenmiyor — diğer kaynaklara devam
+            console.info('ARNavigationUI: AbsoluteOrientationSensor kullanılamıyor -', e.message);
+        }
+    }
+
     _stopCompass() {
         if (this._compassAbs) {
             window.removeEventListener('deviceorientationabsolute', this._compassAbs, true);
@@ -1027,7 +1150,16 @@ class ARNavigationUI {
             cancelAnimationFrame(this._rafId);
             this._rafId = null;
         }
+        if (this._compassTimeout) {
+            clearTimeout(this._compassTimeout);
+            this._compassTimeout = null;
+        }
+        if (this._orientationSensor) {
+            try { this._orientationSensor.stop(); } catch (_) { /* ignore */ }
+            this._orientationSensor = null;
+        }
         this._compassActive = false;
+        this._compassSource = 'none';
         this._headingBuffer = [];
         this._lastRawHeading = null;
         this._jumpRejectCount = 0;
@@ -1144,7 +1276,8 @@ class ARNavigationUI {
             this.onCompassUpdate({
                 heading: heading,
                 beta: beta,
-                targetAngle: this.targetAngle
+                targetAngle: this.targetAngle,
+                source: this._compassSource
             });
         }
 
