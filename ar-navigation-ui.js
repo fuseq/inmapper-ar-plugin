@@ -557,6 +557,12 @@ class ARNavigationUI {
         this._lastRawHeading = null;
         this._jumpRejectCount = 0;
 
+        // Kalibrasyon kapısı: 'none' | 'waiting' | 'blocking' | 'passed'
+        // 'waiting'  → warmup verisi bekleniyor
+        // 'blocking' → kalibrasyon kötü, overlay gösterildi, navigasyon engelli
+        // 'passed'   → kapı geçildi, navigasyon serbest
+        this._calibrationGate = 'passed';
+
         // Kalibrasyon durumu
         this._calibration = {
             quality: ARNavigationUI.CALIBRATION_QUALITY.UNKNOWN,
@@ -629,6 +635,12 @@ class ARNavigationUI {
         this._completed = false;
         this._aligned = false;
 
+        // ── Kalibrasyon kapısı başlangıç durumu ──
+        // calibrationCheck + showCalibrationUI aktifse kapı devreye girer
+        this._calibrationGate = (this.calibrationCheck && this.showCalibrationUI)
+            ? 'waiting'   // Warmup verisi toplanana kadar bekle
+            : 'passed';   // Kalibrasyon kontrolü kapalı, doğrudan navigasyon
+
         // Root'u göster
         this._els.root.classList.add('arn-active');
 
@@ -636,6 +648,18 @@ class ARNavigationUI {
         if (this._compassActive) {
             // Pusula zaten çalışıyor, heading güncel — loading gereksiz
             this._compassReady = true;
+
+            // ── Startup kalibrasyon kapısı (pusula aktif, veri mevcut) ──
+            if (this._calibrationGate === 'waiting') {
+                const T = ARNavigationUI.CALIBRATION_THRESHOLDS;
+                if (this._calibration.rawSamples.length >= T.WARMUP_SAMPLES) {
+                    // Yeterli veri var — hemen kalite değerlendir
+                    // _handleCalibrationGate() evaluateCalibrationQuality içinden
+                    // 'waiting' → 'blocking' veya 'passed' geçişini yapar
+                    this._evaluateCalibrationQuality();
+                }
+                // else: warmup verisi yetersiz, _handleCompass'ta çözülecek
+            }
         } else {
             // İlk başlatma: pusula henüz aktif değil, loading göster
             this._compassReady = false;
@@ -666,6 +690,8 @@ class ARNavigationUI {
         this._hideAllArrows();
         this._resetProgress();
         this._hidePopup();
+        this._hideCalibrationOverlay();
+        this._hideCalibBanner();
         this._els.loading.classList.remove('arn-show');
 
         this._els.root.classList.remove('arn-active');
@@ -804,8 +830,9 @@ class ARNavigationUI {
             if (this.onPopupDismiss) this.onPopupDismiss();
         });
 
-        // Kalibrasyon skip handler
+        // Kalibrasyon skip handler — kapıyı geç, navigasyona devam et
         this._els.calibSkip.addEventListener('click', () => {
+            this._calibrationGate = 'passed';
             this._hideCalibrationOverlay();
         });
 
@@ -1090,6 +1117,8 @@ class ARNavigationUI {
 
     _handleCompass(rawHeading, beta) {
         // ── Kalibrasyon sample kaydı (filtreleme öncesi ham veri) ──
+        // _recordCalibrationSample → _evaluateCalibrationQuality → _handleCalibrationGate
+        // zinciri kalibrasyon kapısı geçişlerini otomatik yönetir.
         this._recordCalibrationSample(rawHeading);
 
         // ── HER ZAMAN heading'i güncelle (stop durumunda bile) ──
@@ -1108,13 +1137,22 @@ class ARNavigationUI {
             this._els.loading.classList.remove('arn-show');
         }
 
-        // Callback
+        // Compass callback — kapı durumundan bağımsız her zaman çağrılır
+        // (dış kodun heading'i izleyebilmesi için)
         if (this.onCompassUpdate) {
             this.onCompassUpdate({
                 heading: heading,
                 beta: beta,
                 targetAngle: this.targetAngle
             });
+        }
+
+        // ── Kalibrasyon kapısı kontrolü ──
+        // 'waiting': warmup verisi toplanıyor, ok güncelleme yapma
+        // 'blocking': kalibrasyon overlay'i açık, ok güncelleme yapma
+        // 'passed': kapı geçildi, navigasyon serbest
+        if (this._calibrationGate === 'waiting' || this._calibrationGate === 'blocking') {
+            return;
         }
 
         // Okları güncelle
@@ -1201,8 +1239,11 @@ class ARNavigationUI {
 
         if (offset === 0) {
             // Tamamlandı!
+            // ❗ Pusula DURDURULMAZ — _completed = true heading takibini durdurmaz,
+            //    sadece ok güncellemesini durdurur (_handleCompass içindeki kontrol).
+            //    Böylece popup açıkken kullanıcı döndüğünde heading güncel kalır
+            //    ve tekrar start() çağrıldığında doğru yönü gösterir.
             this._completed = true;
-            this._stopCompass();
             this._hideAllArrows();
 
             if (this.onCompleted) this.onCompleted();
@@ -1475,6 +1516,11 @@ class ARNavigationUI {
         const prevQuality = cal.quality;
         cal.quality = quality;
 
+        // ── Kalibrasyon kapısı state machine ──
+        // start() sırasında 'waiting' → 'blocking' veya 'passed' geçişi
+        // 'blocking' sırasında kalite iyileşirse → 'passed'
+        this._handleCalibrationGate(quality);
+
         // Kalite düştüyse → uyar
         if (quality === Q.POOR && prevQuality !== Q.POOR) {
             this._onCalibrationDegraded(quality, stdDev, jumpRate, magField);
@@ -1486,7 +1532,6 @@ class ARNavigationUI {
 
         // Kalibrasyon UI'ını güncelle (gösteriliyorsa)
         this._updateCalibrationDots(quality);
-        this._updateCalibBanner(quality);
     }
 
     // ────────────────────────────────────────
@@ -1523,38 +1568,83 @@ class ARNavigationUI {
     }
 
     // ────────────────────────────────────────
+    //  PRIVATE: Kalibrasyon Kapısı (Gate) State Machine
+    // ────────────────────────────────────────
+
+    /**
+     * Kalibrasyon kapısı geçişlerini yönetir.
+     * _evaluateCalibrationQuality() içinden her değerlendirmede çağrılır.
+     *
+     * State geçişleri:
+     *   'waiting'  → 'blocking'  (kalite POOR ise, overlay göster)
+     *   'waiting'  → 'passed'    (kalite FAIR/GOOD ise, navigasyona geç)
+     *   'blocking' → 'passed'    (kalite iyileşti, overlay kapat)
+     *   'passed'   → 'passed'    (değişiklik yok, banner ile yönetilir)
+     *
+     * @param {string} quality - Yeni kalibrasyon kalite seviyesi
+     */
+    _handleCalibrationGate(quality) {
+        const Q = ARNavigationUI.CALIBRATION_QUALITY;
+
+        if (this._calibrationGate === 'waiting') {
+            if (quality === Q.POOR) {
+                // Kalibrasyon kötü → overlay göster, navigasyonu engelle
+                this._calibrationGate = 'blocking';
+                if (this.showCalibrationUI) {
+                    this._showCalibrationOverlay();
+                }
+            } else {
+                // Kalibrasyon yeterli → navigasyona geç
+                this._calibrationGate = 'passed';
+            }
+        } else if (this._calibrationGate === 'blocking') {
+            if (quality !== Q.POOR) {
+                // Kalibrasyon iyileşti → kapıyı aç, overlay kapat
+                this._calibrationGate = 'passed';
+                this._hideCalibrationOverlay();
+            }
+            // Hâlâ POOR ise → blocking kalır, overlay açık
+        }
+        // 'passed' veya 'none' ise gate müdahale etmez
+    }
+
+    // ────────────────────────────────────────
     //  PRIVATE: Kalibrasyon Olayları
     // ────────────────────────────────────────
 
     _onCalibrationDegraded(quality, stdDev, jumpRate, magField) {
         const detail = { quality, stdDev, jumpRate, magField };
 
-        // Callback
+        // Callback — her durumda çağrılır
         if (this.onCalibrationNeeded) {
             this.onCalibrationNeeded(detail);
         }
 
-        // UI
+        // Gate aşamasındaysa UI yönetimi gate tarafından yapılır
+        if (this._calibrationGate === 'waiting' || this._calibrationGate === 'blocking') {
+            return;
+        }
+
+        // Gate geçildikten sonra → sadece kompakt banner göster (overlay değil)
         if (this.showCalibrationUI && this._running) {
-            // İlk kez veya AR sırasında → overlay yerine banner göster
-            if (!this._calibration.prompted) {
-                this._calibration.prompted = true;
-                this._showCalibrationOverlay();
-            } else {
-                this._showCalibBanner(quality);
-            }
+            this._showCalibBanner(quality);
         }
     }
 
     _onCalibrationImproved(quality) {
+        // Callback — her durumda çağrılır
         if (this.onCalibrationImproved) {
             this.onCalibrationImproved({ quality });
         }
 
-        // İyileşme yeterliyse overlay'i otomatik kapat
+        // Gate aşamasındaysa UI yönetimi gate tarafından yapılır
+        if (this._calibrationGate === 'waiting' || this._calibrationGate === 'blocking') {
+            return;
+        }
+
+        // Gate geçildikten sonra → banner'ı kapat
         if (quality === ARNavigationUI.CALIBRATION_QUALITY.GOOD ||
             quality === ARNavigationUI.CALIBRATION_QUALITY.FAIR) {
-            this._hideCalibrationOverlay();
             this._hideCalibBanner();
         }
     }
