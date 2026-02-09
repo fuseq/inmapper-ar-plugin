@@ -47,6 +47,39 @@ class ARNavigationUI {
 
     static _stylesInjected = false;
 
+    // ================================================================
+    //  STATIC: KALİBRASYON SABİTLERİ
+    // ================================================================
+
+    /** Kalibrasyon kalite seviyeleri */
+    static CALIBRATION_QUALITY = {
+        UNKNOWN: 'unknown',   // Henüz yeterli veri yok
+        POOR:    'poor',      // Kötü — 8 hareketi gerekli
+        FAIR:    'fair',      // Kabul edilebilir ama ideal değil
+        GOOD:    'good'       // İyi kalibrasyon
+    };
+
+    /** Kalibrasyon tespit eşik değerleri */
+    static CALIBRATION_THRESHOLDS = {
+        // Heading standart sapma eşikleri (dairesel, derece cinsinden)
+        HEADING_STD_POOR: 15,        // > 15° std dev → POOR
+        HEADING_STD_FAIR: 8,         // > 8° std dev → FAIR
+        HEADING_STD_GOOD: 4,         // < 4° std dev → GOOD
+
+        // Manyetik alan gücü (µT) — Dünya manyetik alanı: ~25-65 µT
+        MAG_FIELD_MIN: 20,           // Altı → manyetik kalkan / bozulma
+        MAG_FIELD_MAX: 70,           // Üstü → manyetik parazit
+
+        // Analiz penceresi
+        SAMPLE_WINDOW: 40,           // Kaç sample üzerinden analiz
+        CHECK_INTERVAL_MS: 2000,     // Kalibrasyon kontrol sıklığı (ms)
+        WARMUP_SAMPLES: 10,          // İlk bu kadar sample'dan sonra kontrol başla
+
+        // Jump (sıçrama) oranı eşiği
+        JUMP_RATE_POOR: 0.30,        // > %30 sıçrama oranı → POOR
+        JUMP_RATE_FAIR: 0.15,        // > %15 sıçrama oranı → FAIR
+    };
+
     static STYLES = `
         /* ===== ROOT ===== */
         .arn-root {
@@ -258,6 +291,165 @@ class ARNavigationUI {
         .arn-popup-btn:active {
             transform: scale(0.96);
         }
+
+        /* ===== KALİBRASYON OVERLAY ===== */
+        .arn-calibration {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(4px);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 9050;
+            padding: 30px;
+        }
+        .arn-calibration.arn-show {
+            display: flex;
+        }
+
+        /* Figure-8 animasyonu */
+        .arn-calibration-figure8 {
+            width: 120px;
+            height: 120px;
+            position: relative;
+            margin-bottom: 24px;
+        }
+        .arn-calibration-phone {
+            width: 36px;
+            height: 56px;
+            border: 3px solid #fff;
+            border-radius: 8px;
+            position: absolute;
+            animation: arnFigure8 4s ease-in-out infinite;
+        }
+        .arn-calibration-phone::after {
+            content: '';
+            position: absolute;
+            bottom: 4px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 10px;
+            height: 10px;
+            border: 2px solid rgba(255,255,255,0.6);
+            border-radius: 50%;
+        }
+        @keyframes arnFigure8 {
+            0%   { top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(0deg); }
+            12%  { top: 15%; left: 80%; transform: translate(-50%, -50%) rotate(45deg); }
+            25%  { top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(90deg); }
+            37%  { top: 85%; left: 20%; transform: translate(-50%, -50%) rotate(180deg); }
+            50%  { top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(180deg); }
+            62%  { top: 15%; left: 20%; transform: translate(-50%, -50%) rotate(225deg); }
+            75%  { top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(270deg); }
+            87%  { top: 85%; left: 80%; transform: translate(-50%, -50%) rotate(315deg); }
+            100% { top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(360deg); }
+        }
+        /* 8 yolu izi */
+        .arn-calibration-path {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+        }
+        .arn-calibration-path svg {
+            width: 100%; height: 100%;
+        }
+        .arn-calibration-path path {
+            fill: none;
+            stroke: rgba(255,255,255,0.15);
+            stroke-width: 2;
+        }
+
+        .arn-calibration-title {
+            color: #fff;
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .arn-calibration-text {
+            color: rgba(255,255,255,0.8);
+            font-size: 14px;
+            text-align: center;
+            line-height: 1.5;
+            max-width: 280px;
+            margin-bottom: 20px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .arn-calibration-quality {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+        .arn-calibration-dots {
+            display: flex;
+            gap: 6px;
+        }
+        .arn-calibration-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.2);
+            transition: background 0.3s ease;
+        }
+        .arn-calibration-dot.arn-dot-active {
+            background: #4CAF50;
+        }
+        .arn-calibration-dot.arn-dot-warn {
+            background: #FF9800;
+        }
+        .arn-calibration-dot.arn-dot-bad {
+            background: #f44336;
+        }
+        .arn-calibration-label {
+            color: rgba(255,255,255,0.7);
+            font-size: 12px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .arn-calibration-skip {
+            padding: 8px 20px;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 20px;
+            background: transparent;
+            color: rgba(255,255,255,0.6);
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .arn-calibration-skip:active {
+            background: rgba(255,255,255,0.1);
+        }
+
+        /* ===== KALİBRASYON BANNER (kompakt, AR sırasında) ===== */
+        .arn-calib-banner {
+            position: fixed;
+            top: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(244, 67, 54, 0.9);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            z-index: 9015;
+            display: none;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            backdrop-filter: blur(4px);
+        }
+        .arn-calib-banner.arn-show {
+            display: flex;
+        }
+        .arn-calib-banner.arn-warn {
+            background: rgba(255, 152, 0, 0.9);
+        }
     `;
 
     // ================================================================
@@ -312,6 +504,10 @@ class ARNavigationUI {
      * @param {Function} [options.onStart]              - AR başlatıldığında
      * @param {Function} [options.onStop]               - AR durdurulduğunda
      * @param {Function} [options.onError]              - Hata oluştuğunda (string)
+     * @param {boolean}  [options.calibrationCheck=true] - Kalibrasyon kalitesi izlensin mi
+     * @param {boolean}  [options.showCalibrationUI=true]- Kalibrasyon gerektiğinde UI gösterilsin mi
+     * @param {Function} [options.onCalibrationNeeded]   - Kalibrasyon gerektiğinde ({quality, stdDev, magField, jumpRate})
+     * @param {Function} [options.onCalibrationImproved] - Kalibrasyon iyileştiğinde ({quality})
      */
     constructor(options = {}) {
         // Konfigürasyon
@@ -326,6 +522,10 @@ class ARNavigationUI {
         this.manageCamera = options.manageCamera !== false;
         this.arrowImages = options.arrowImages ?? null;
 
+        // Kalibrasyon konfigürasyonu
+        this.calibrationCheck = options.calibrationCheck !== false;
+        this.showCalibrationUI = options.showCalibrationUI !== false;
+
         // Callback'ler
         this.onCompleted = options.onCompleted ?? null;
         this.onPopupDismiss = options.onPopupDismiss ?? null;
@@ -335,6 +535,8 @@ class ARNavigationUI {
         this.onStart = options.onStart ?? null;
         this.onStop = options.onStop ?? null;
         this.onError = options.onError ?? null;
+        this.onCalibrationNeeded = options.onCalibrationNeeded ?? null;
+        this.onCalibrationImproved = options.onCalibrationImproved ?? null;
 
         // Dahili durum
         this._running = false;
@@ -354,6 +556,18 @@ class ARNavigationUI {
         this._headingBuffer = [];
         this._lastRawHeading = null;
         this._jumpRejectCount = 0;
+
+        // Kalibrasyon durumu
+        this._calibration = {
+            quality: ARNavigationUI.CALIBRATION_QUALITY.UNKNOWN,
+            rawSamples: [],         // Son N ham heading değeri (std dev için)
+            totalSamples: 0,        // Toplam alınan sample sayısı
+            totalJumps: 0,          // Toplam reddedilen sıçrama sayısı
+            lastCheckTime: 0,       // Son kalibrasyon kontrolü zamanı
+            magField: null,         // Manyetik alan gücü (µT, Magnetometer varsa)
+            magSensor: null,        // Magnetometer API instance
+            prompted: false,        // Kalibrasyon ekranı gösterildi mi
+        };
 
         // Başlat
         ARNavigationUI._ensureStyles();
@@ -530,6 +744,34 @@ class ARNavigationUI {
                     <button class="arn-popup-btn">${this.popupButtonText}</button>
                 </div>
             </div>
+            <div class="arn-calibration">
+                <div class="arn-calibration-figure8">
+                    <div class="arn-calibration-path">
+                        <svg viewBox="0 0 120 120">
+                            <path d="M60 60 C60 30, 100 30, 100 60 C100 90, 60 90, 60 60 C60 30, 20 30, 20 60 C20 90, 60 90, 60 60"/>
+                        </svg>
+                    </div>
+                    <div class="arn-calibration-phone"></div>
+                </div>
+                <div class="arn-calibration-title">Pusula Kalibrasyonu Gerekli</div>
+                <div class="arn-calibration-text">
+                    Telefonunuzu havada <b>8 (∞) şekli</b> çizerek tüm eksenlerde döndürün.
+                    Bu işlem manyetometreyi kalibre eder.
+                </div>
+                <div class="arn-calibration-quality">
+                    <div class="arn-calibration-dots">
+                        <div class="arn-calibration-dot" data-dot="0"></div>
+                        <div class="arn-calibration-dot" data-dot="1"></div>
+                        <div class="arn-calibration-dot" data-dot="2"></div>
+                        <div class="arn-calibration-dot" data-dot="3"></div>
+                    </div>
+                    <span class="arn-calibration-label">Kalibrasyon kalitesi</span>
+                </div>
+                <button class="arn-calibration-skip">Geç →</button>
+            </div>
+            <div class="arn-calib-banner">
+                <span>⚠ Pusula kalibrasyonu düşük</span>
+            </div>
         `;
 
         document.body.appendChild(root);
@@ -546,6 +788,10 @@ class ARNavigationUI {
         this._els.popup = root.querySelector('.arn-popup');
         this._els.popupMessage = root.querySelector('.arn-popup-message');
         this._els.popupBtn = root.querySelector('.arn-popup-btn');
+        this._els.calibration = root.querySelector('.arn-calibration');
+        this._els.calibDots = root.querySelectorAll('.arn-calibration-dot');
+        this._els.calibSkip = root.querySelector('.arn-calibration-skip');
+        this._els.calibBanner = root.querySelector('.arn-calib-banner');
 
         // İlerleme süresi ayarla
         this._els.progressBar.style.transition =
@@ -556,6 +802,16 @@ class ARNavigationUI {
             this._hidePopup();
             this.stop();
             if (this.onPopupDismiss) this.onPopupDismiss();
+        });
+
+        // Kalibrasyon skip handler
+        this._els.calibSkip.addEventListener('click', () => {
+            this._hideCalibrationOverlay();
+        });
+
+        // Banner tıklandığında kalibrasyon ekranını göster
+        this._els.calibBanner.addEventListener('click', () => {
+            this._showCalibrationOverlay();
         });
     }
 
@@ -707,6 +963,9 @@ class ARNavigationUI {
             window.addEventListener('deviceorientationabsolute', this._compassAbs, true);
             window.addEventListener('deviceorientation', this._compassWk, true);
             this._compassActive = true;
+
+            // Kalibrasyon izlemeyi başlat
+            this._startCalibrationMonitor();
         };
 
         // iOS izin kontrolü
@@ -744,6 +1003,9 @@ class ARNavigationUI {
         this._headingBuffer = [];
         this._lastRawHeading = null;
         this._jumpRejectCount = 0;
+
+        // Kalibrasyon izlemeyi durdur
+        this._stopCalibrationMonitor();
     }
 
     /**
@@ -791,6 +1053,7 @@ class ARNavigationUI {
 
             if (diff > maxJump) {
                 this._jumpRejectCount++;
+                this._recordCalibrationJump(); // Kalibrasyon istatistiği
                 // Belirli sayıda ardışık reject → gerçek yön değişikliği, kabul et
                 if (this._jumpRejectCount < rejectThreshold) {
                     // Sıçramayı reddet, mevcut kararlı heading'i döndür
@@ -826,6 +1089,9 @@ class ARNavigationUI {
     }
 
     _handleCompass(rawHeading, beta) {
+        // ── Kalibrasyon sample kaydı (filtreleme öncesi ham veri) ──
+        this._recordCalibrationSample(rawHeading);
+
         // ── HER ZAMAN heading'i güncelle (stop durumunda bile) ──
         // Sensör referans çerçevesi canlı tutulur, tekrar start'ta
         // heading zaten güncel ve kararlıdır.
@@ -993,6 +1259,376 @@ class ARNavigationUI {
     _emitError(message) {
         console.error('ARNavigationUI:', message);
         if (this.onError) this.onError(message);
+    }
+
+    // ================================================================
+    //  KALİBRASYON SİSTEMİ
+    // ================================================================
+
+    // ────────────────────────────────────────
+    //  PUBLIC API: Kalibrasyon
+    // ────────────────────────────────────────
+
+    /**
+     * Mevcut kalibrasyon kalitesini döndürür
+     * @returns {'unknown'|'poor'|'fair'|'good'}
+     */
+    get calibrationQuality() {
+        return this._calibration.quality;
+    }
+
+    /**
+     * Detaylı kalibrasyon raporunu döndürür
+     * @returns {Object}
+     */
+    getCalibrationReport() {
+        const cal = this._calibration;
+        const stdDev = this._computeCircularStdDev(cal.rawSamples);
+        const jumpRate = cal.totalSamples > 0
+            ? cal.totalJumps / cal.totalSamples
+            : 0;
+
+        return {
+            quality: cal.quality,
+            headingStdDev: Math.round(stdDev * 100) / 100,
+            jumpRate: Math.round(jumpRate * 1000) / 1000,
+            magneticField: cal.magField,
+            totalSamples: cal.totalSamples,
+            totalJumps: cal.totalJumps,
+            hasMagnetometer: cal.magSensor !== null,
+            hasAbsoluteSource: this._hasAbsoluteSource
+        };
+    }
+
+    /**
+     * Kalibrasyon ekranını manuel olarak gösterir
+     */
+    requestCalibration() {
+        this._showCalibrationOverlay();
+    }
+
+    // ────────────────────────────────────────
+    //  PRIVATE: Kalibrasyon Başlatma / Durdurma
+    // ────────────────────────────────────────
+
+    /**
+     * Kalibrasyon izleme sistemini başlatır.
+     * _startCompass() içinden çağrılır.
+     */
+    _startCalibrationMonitor() {
+        if (!this.calibrationCheck) return;
+
+        // Kalibrasyon state'ini sıfırla
+        this._calibration.rawSamples = [];
+        this._calibration.totalSamples = 0;
+        this._calibration.totalJumps = 0;
+        this._calibration.lastCheckTime = 0;
+        this._calibration.quality = ARNavigationUI.CALIBRATION_QUALITY.UNKNOWN;
+        this._calibration.prompted = false;
+
+        // Magnetometer API'yi dene (manyetik alan gücü kontrolü)
+        this._startMagnetometer();
+    }
+
+    /**
+     * Kalibrasyon izleme sistemini durdurur.
+     * _stopCompass() içinden çağrılır.
+     */
+    _stopCalibrationMonitor() {
+        this._stopMagnetometer();
+        this._hideCalibrationOverlay();
+        this._hideCalibBanner();
+    }
+
+    // ────────────────────────────────────────
+    //  PRIVATE: Magnetometer API (Generic Sensor)
+    // ────────────────────────────────────────
+
+    /**
+     * Magnetometer Generic Sensor API'yi başlatır (varsa).
+     * Ham manyetik alan gücünü (µT) okur.
+     * Normal Dünya manyetik alanı: ~25-65 µT
+     * Bu aralık dışı = manyetik parazit veya bozuk kalibrasyon.
+     */
+    _startMagnetometer() {
+        if (!('Magnetometer' in window)) {
+            // API desteklenmiyor — sorun değil, sadece heading analizi ile devam
+            return;
+        }
+
+        try {
+            const sensor = new Magnetometer({ frequency: 10 });
+
+            sensor.addEventListener('reading', () => {
+                const { x, y, z } = sensor;
+                // Manyetik alan gücü (µT) = vektör büyüklüğü
+                this._calibration.magField = Math.sqrt(x * x + y * y + z * z);
+            });
+
+            sensor.addEventListener('error', (e) => {
+                console.warn('ARNavigationUI: Magnetometer erişilemedi -', e.error.message);
+                this._calibration.magSensor = null;
+            });
+
+            sensor.start();
+            this._calibration.magSensor = sensor;
+
+        } catch (e) {
+            // İzin yok veya desteklenmiyor
+            console.warn('ARNavigationUI: Magnetometer API başlatılamadı -', e.message);
+        }
+    }
+
+    _stopMagnetometer() {
+        if (this._calibration.magSensor) {
+            try { this._calibration.magSensor.stop(); } catch (e) { /* ignore */ }
+            this._calibration.magSensor = null;
+        }
+    }
+
+    // ────────────────────────────────────────
+    //  PRIVATE: Kalibrasyon Kalite Analizi
+    // ────────────────────────────────────────
+
+    /**
+     * Her compass update'inde çağrılır.
+     * Ham heading'i kaydeder ve periyodik olarak kalite kontrolü yapar.
+     * @param {number} rawHeading - Filtrelenmemiş ham heading (0-360)
+     */
+    _recordCalibrationSample(rawHeading) {
+        if (!this.calibrationCheck) return;
+
+        const cal = this._calibration;
+        const T = ARNavigationUI.CALIBRATION_THRESHOLDS;
+
+        // Sample'ı kaydet
+        cal.rawSamples.push(rawHeading);
+        cal.totalSamples++;
+        if (cal.rawSamples.length > T.SAMPLE_WINDOW) {
+            cal.rawSamples.shift();
+        }
+
+        // Warmup süresi — yeterli veri toplanmadan kontrol yapma
+        if (cal.totalSamples < T.WARMUP_SAMPLES) return;
+
+        // Periyodik kontrol (her CHECK_INTERVAL_MS'de bir)
+        const now = Date.now();
+        if (now - cal.lastCheckTime < T.CHECK_INTERVAL_MS) return;
+        cal.lastCheckTime = now;
+
+        // ── Kalite analizi ──
+        this._evaluateCalibrationQuality();
+    }
+
+    /**
+     * Sıçrama (jump rejection) olduğunda kalibrasyon istatistiğini günceller.
+     */
+    _recordCalibrationJump() {
+        if (!this.calibrationCheck) return;
+        this._calibration.totalJumps++;
+    }
+
+    /**
+     * Kalibrasyon kalitesini çoklu metriklerle değerlendirir.
+     *
+     * Metrikler:
+     * 1. Heading standart sapması (dairesel) — sensör gürültüsü/tutarsızlık
+     * 2. Sıçrama oranı — reddedilen reading'lerin toplama oranı
+     * 3. Manyetik alan gücü — normal aralıkta mı (Magnetometer varsa)
+     */
+    _evaluateCalibrationQuality() {
+        const cal = this._calibration;
+        const T = ARNavigationUI.CALIBRATION_THRESHOLDS;
+        const Q = ARNavigationUI.CALIBRATION_QUALITY;
+
+        const stdDev = this._computeCircularStdDev(cal.rawSamples);
+        const jumpRate = cal.totalSamples > 0
+            ? cal.totalJumps / cal.totalSamples
+            : 0;
+        const magField = cal.magField;
+
+        // ── Kalite seviyesini belirle (en kötü metrik kazanır) ──
+        let quality = Q.GOOD;
+
+        // 1. Heading standart sapması
+        if (stdDev > T.HEADING_STD_POOR) {
+            quality = Q.POOR;
+        } else if (stdDev > T.HEADING_STD_FAIR) {
+            quality = this._worseQuality(quality, Q.FAIR);
+        }
+
+        // 2. Sıçrama oranı
+        if (jumpRate > T.JUMP_RATE_POOR) {
+            quality = Q.POOR;
+        } else if (jumpRate > T.JUMP_RATE_FAIR) {
+            quality = this._worseQuality(quality, Q.FAIR);
+        }
+
+        // 3. Manyetik alan gücü (Magnetometer API varsa)
+        if (magField !== null) {
+            if (magField < T.MAG_FIELD_MIN || magField > T.MAG_FIELD_MAX) {
+                quality = Q.POOR;
+            }
+        }
+
+        // ── Sonucu uygula ──
+        const prevQuality = cal.quality;
+        cal.quality = quality;
+
+        // Kalite düştüyse → uyar
+        if (quality === Q.POOR && prevQuality !== Q.POOR) {
+            this._onCalibrationDegraded(quality, stdDev, jumpRate, magField);
+        }
+        // Kalite yükseldiyse → bildir
+        if (this._isQualityBetter(quality, prevQuality) && prevQuality !== Q.UNKNOWN) {
+            this._onCalibrationImproved(quality);
+        }
+
+        // Kalibrasyon UI'ını güncelle (gösteriliyorsa)
+        this._updateCalibrationDots(quality);
+        this._updateCalibBanner(quality);
+    }
+
+    // ────────────────────────────────────────
+    //  PRIVATE: Dairesel Standart Sapma
+    // ────────────────────────────────────────
+
+    /**
+     * Açısal verilerin dairesel standart sapmasını hesaplar.
+     * 0°/360° geçişinde doğru çalışır (sin/cos yöntemi).
+     *
+     * @param {number[]} samples - Açı değerleri (0-360)
+     * @returns {number} Standart sapma (derece)
+     */
+    _computeCircularStdDev(samples) {
+        if (!samples || samples.length < 2) return 0;
+
+        const degToRad = Math.PI / 180;
+        let sinSum = 0, cosSum = 0;
+        for (const s of samples) {
+            sinSum += Math.sin(s * degToRad);
+            cosSum += Math.cos(s * degToRad);
+        }
+        const n = samples.length;
+        const R = Math.sqrt(
+            (sinSum / n) * (sinSum / n) +
+            (cosSum / n) * (cosSum / n)
+        );
+
+        // R → 1 = mükemmel tutarlılık, R → 0 = tamamen dağınık
+        // Dairesel standart sapma = sqrt(-2 * ln(R))  (radyan → dereceye çevir)
+        if (R >= 1) return 0;
+        if (R <= 0) return 180;
+        return Math.sqrt(-2 * Math.log(R)) * (180 / Math.PI);
+    }
+
+    // ────────────────────────────────────────
+    //  PRIVATE: Kalibrasyon Olayları
+    // ────────────────────────────────────────
+
+    _onCalibrationDegraded(quality, stdDev, jumpRate, magField) {
+        const detail = { quality, stdDev, jumpRate, magField };
+
+        // Callback
+        if (this.onCalibrationNeeded) {
+            this.onCalibrationNeeded(detail);
+        }
+
+        // UI
+        if (this.showCalibrationUI && this._running) {
+            // İlk kez veya AR sırasında → overlay yerine banner göster
+            if (!this._calibration.prompted) {
+                this._calibration.prompted = true;
+                this._showCalibrationOverlay();
+            } else {
+                this._showCalibBanner(quality);
+            }
+        }
+    }
+
+    _onCalibrationImproved(quality) {
+        if (this.onCalibrationImproved) {
+            this.onCalibrationImproved({ quality });
+        }
+
+        // İyileşme yeterliyse overlay'i otomatik kapat
+        if (quality === ARNavigationUI.CALIBRATION_QUALITY.GOOD ||
+            quality === ARNavigationUI.CALIBRATION_QUALITY.FAIR) {
+            this._hideCalibrationOverlay();
+            this._hideCalibBanner();
+        }
+    }
+
+    // ────────────────────────────────────────
+    //  PRIVATE: Kalibrasyon UI
+    // ────────────────────────────────────────
+
+    _showCalibrationOverlay() {
+        if (this._els.calibration) {
+            this._els.calibration.classList.add('arn-show');
+            this._updateCalibrationDots(this._calibration.quality);
+        }
+    }
+
+    _hideCalibrationOverlay() {
+        if (this._els.calibration) {
+            this._els.calibration.classList.remove('arn-show');
+        }
+    }
+
+    _showCalibBanner(quality) {
+        if (!this._els.calibBanner) return;
+        this._els.calibBanner.classList.add('arn-show');
+        this._els.calibBanner.classList.toggle('arn-warn',
+            quality === ARNavigationUI.CALIBRATION_QUALITY.FAIR);
+    }
+
+    _hideCalibBanner() {
+        if (this._els.calibBanner) {
+            this._els.calibBanner.classList.remove('arn-show');
+        }
+    }
+
+    /**
+     * Kalibrasyon kalitesi noktalarını günceller (4 nokta göstergesi)
+     * POOR=1 kırmızı, FAIR=2 turuncu, GOOD=4 yeşil
+     */
+    _updateCalibrationDots(quality) {
+        if (!this._els.calibDots || this._els.calibDots.length === 0) return;
+
+        const Q = ARNavigationUI.CALIBRATION_QUALITY;
+        let activeCount = 0;
+        let colorClass = '';
+
+        switch (quality) {
+            case Q.POOR:    activeCount = 1; colorClass = 'arn-dot-bad';    break;
+            case Q.FAIR:    activeCount = 2; colorClass = 'arn-dot-warn';   break;
+            case Q.GOOD:    activeCount = 4; colorClass = 'arn-dot-active'; break;
+            default:        activeCount = 0; break;
+        }
+
+        this._els.calibDots.forEach((dot, i) => {
+            dot.classList.remove('arn-dot-active', 'arn-dot-warn', 'arn-dot-bad');
+            if (i < activeCount) {
+                dot.classList.add(colorClass);
+            }
+        });
+    }
+
+    // ────────────────────────────────────────
+    //  PRIVATE: Kalite Karşılaştırma Yardımcıları
+    // ────────────────────────────────────────
+
+    /** İki kalite seviyesinden kötü olanını döndürür */
+    _worseQuality(a, b) {
+        const order = { good: 3, fair: 2, poor: 1, unknown: 0 };
+        return (order[a] || 0) <= (order[b] || 0) ? a : b;
+    }
+
+    /** a, b'den daha iyi mi? */
+    _isQualityBetter(a, b) {
+        const order = { good: 3, fair: 2, poor: 1, unknown: 0 };
+        return (order[a] || 0) > (order[b] || 0);
     }
 }
 

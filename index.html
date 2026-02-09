@@ -135,6 +135,10 @@
                 <span class="label">Pusula:</span>
                 <span class="value" id="compass">-</span>
             </div>
+            <div class="info-row">
+                <span class="label">Kalibrasyon:</span>
+                <span class="value" id="calibration">-</span>
+            </div>
         </div>
 
         <!-- Kontrol Butonları -->
@@ -172,17 +176,16 @@ const dir = calc.calculate();
 // 2. AR navigasyonu başlat (asset'li)
 const nav = new ARNavigationUI({
     targetAngle: dir.compassAngle,
-    arrowImages: {
-        left: './assets/left_arrow.png',
-        right: './assets/right_arrow.png',
-        forward: './assets/ileri.png',
-        forwardPerspective: './assets/ileri_perspective.png'
-    },
-    popupImage: './assets/check.png',
-    loadingImage: './assets/location.gif',
+    calibrationCheck: true,
+    showCalibrationUI: true,
+    arrowImages: { ... },
+    onCalibrationNeeded: (d) =&gt;
+        console.log('Kalibrasyon:', d.quality),
     onCompleted: () =&gt; alert('Tamam!')
 });
-nav.start();</div>
+nav.start();
+// nav.calibrationQuality → 'good'
+// nav.getCalibrationReport()</div>
     </div>
 
     <script>
@@ -204,6 +207,7 @@ nav.start();</div>
         const elStatus = document.getElementById('status');
         const elTarget = document.getElementById('target');
         const elCompass = document.getElementById('compass');
+        const elCalibration = document.getElementById('calibration');
         const btnStart = document.getElementById('btnStart');
         const btnStop = document.getElementById('btnStop');
 
@@ -309,6 +313,19 @@ nav.start();</div>
                         btnStart.classList.remove('hidden');
                         btnStop.classList.add('hidden');
                         elStatus.textContent = 'Tamamlandı';
+                    },
+
+                    onCalibrationNeeded: (data) => {
+                        const labels = { poor: '🔴 Kötü', fair: '🟡 Orta', good: '🟢 İyi' };
+                        elCalibration.textContent =
+                            `${labels[data.quality] || '?'} (σ=${data.stdDev.toFixed(1)}°)`;
+                        console.log('Kalibrasyon gerekli:', data);
+                    },
+
+                    onCalibrationImproved: (data) => {
+                        const labels = { poor: '🔴 Kötü', fair: '🟡 Orta', good: '🟢 İyi' };
+                        elCalibration.textContent = labels[data.quality] || '?';
+                        console.log('Kalibrasyon iyileşti:', data.quality);
                     },
 
                     onError: (err) => {
