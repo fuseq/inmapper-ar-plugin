@@ -169,11 +169,12 @@ class ARNavigationUI {
         }
 
         .arn-anim-forwardPerspective {
-            animation: arnJumpSmall 1.2s ease infinite;
+            animation: arnApproach 1.8s ease-in-out infinite;
         }
-        @keyframes arnJumpSmall {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-5px); }
+        @keyframes arnApproach {
+            0%   { transform: scale(0.7) translateY(12px); opacity: 0.4; }
+            50%  { transform: scale(1.15) translateY(-4px); opacity: 1; }
+            100% { transform: scale(0.7) translateY(12px); opacity: 0.4; }
         }
 
         /* ===== LOADING OVERLAY ===== */
