@@ -1565,21 +1565,8 @@ class ARNavigationUI {
     }
 
     // ────────────────────────────────────────
-    //  PRIVATE: Kalibrasyon Kapısı (Gate) State Machine
+    //  PRIVATE: Kalibrasyon Olayları
     // ────────────────────────────────────────
-
-    /**
-     * Kalibrasyon kapısı geçişlerini yönetir.
-     * _evaluateCalibrationQuality() içinden her değerlendirmede çağrılır.
-     *
-     * State geçişleri:
-     *   'waiting'  → 'blocking'  (kalite POOR ise, overlay göster)
-     *   'waiting'  → 'passed'    (kalite FAIR/GOOD ise, navigasyona geç)
-     *   'blocking' → 'passed'    (kalite iyileşti, overlay kapat)
-     *   'passed'   → 'passed'    (değişiklik yok, banner ile yönetilir)
-     *
-     * @param {string} quality - Yeni kalibrasyon kalite seviyesi
-     */
     // ────────────────────────────────────────
     //  PRIVATE: Kalibrasyon Olayları
     // ────────────────────────────────────────
