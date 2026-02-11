@@ -451,6 +451,33 @@ class ARNavigationUI {
         .arn-calib-banner.arn-warn {
             background: rgba(255, 152, 0, 0.9);
         }
+
+        /* ===== DEBUG PANEL ===== */
+        .arn-debug {
+            position: fixed; bottom: 0; left: 0; right: 0; z-index: 9020;
+            background: rgba(0,0,0,.82); backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            color: #fff; font-size: 12px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            transform: translateY(calc(100% - 32px));
+            transition: transform .25s ease;
+        }
+        .arn-debug.arn-debug-open { transform: translateY(0); }
+        .arn-debug-toggle {
+            display: flex; align-items: center; justify-content: center; gap: 6px;
+            height: 32px; cursor: pointer; user-select: none;
+            color: rgba(255,255,255,.6); font-size: 11px; letter-spacing: .5px;
+        }
+        .arn-debug-toggle::before { content: '▲'; font-size: 8px; transition: transform .25s; }
+        .arn-debug.arn-debug-open .arn-debug-toggle::before { content: '▼'; }
+        .arn-debug-body { padding: 0 12px 10px; }
+        .arn-debug-row {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,.08);
+        }
+        .arn-debug-row:last-child { border-bottom: none; }
+        .arn-debug-label { color: rgba(255,255,255,.5); }
+        .arn-debug-value { font-weight: 600; color: #4fc3f7; font-variant-numeric: tabular-nums; }
     `;
 
     // ================================================================
@@ -526,6 +553,9 @@ class ARNavigationUI {
         // Kalibrasyon konfigürasyonu
         this.calibrationCheck = options.calibrationCheck !== false;
         this.showCalibrationUI = options.showCalibrationUI !== false;
+
+        // Debug panel (varsayılan kapalı, açıkça true verilmeli)
+        this.showDebugPanel = options.showDebugPanel === true;
 
         // Callback'ler
         this.onCompleted = options.onCompleted ?? null;
@@ -683,6 +713,10 @@ class ARNavigationUI {
         }
 
         if (this.onStart) this.onStart();
+        this._updateDebugPanel({
+            status: 'AR Çalışıyor…',
+            target: this.targetAngle.toFixed(0) + '°'
+        });
     }
 
     /**
@@ -707,6 +741,7 @@ class ARNavigationUI {
         this._els.root.classList.remove('arn-active');
 
         if (this.onStop) this.onStop();
+        this._updateDebugPanel({ status: 'Durduruldu' });
     }
 
     /**
@@ -809,6 +844,32 @@ class ARNavigationUI {
                 <span>⚠ Pusula kalibrasyonu düşük</span>
             </div>
         `;
+
+        // ── Debug Panel (opsiyonel) ──
+        if (this.showDebugPanel) {
+            const dbg = document.createElement('div');
+            dbg.className = 'arn-debug';
+            dbg.innerHTML = `
+                <div class="arn-debug-toggle">DEBUG</div>
+                <div class="arn-debug-body">
+                    <div class="arn-debug-row"><span class="arn-debug-label">Durum</span><span class="arn-debug-value arn-dbg-status">–</span></div>
+                    <div class="arn-debug-row"><span class="arn-debug-label">Hedef Yön</span><span class="arn-debug-value arn-dbg-target">–</span></div>
+                    <div class="arn-debug-row"><span class="arn-debug-label">Pusula</span><span class="arn-debug-value arn-dbg-heading">–</span></div>
+                    <div class="arn-debug-row"><span class="arn-debug-label">Kaynak</span><span class="arn-debug-value arn-dbg-source">–</span></div>
+                    <div class="arn-debug-row"><span class="arn-debug-label">Kalibrasyon</span><span class="arn-debug-value arn-dbg-calib">–</span></div>
+                </div>
+            `;
+            dbg.querySelector('.arn-debug-toggle').addEventListener('click', () => {
+                dbg.classList.toggle('arn-debug-open');
+            });
+            root.appendChild(dbg);
+
+            this._els.dbgStatus  = dbg.querySelector('.arn-dbg-status');
+            this._els.dbgTarget  = dbg.querySelector('.arn-dbg-target');
+            this._els.dbgHeading = dbg.querySelector('.arn-dbg-heading');
+            this._els.dbgSource  = dbg.querySelector('.arn-dbg-source');
+            this._els.dbgCalib   = dbg.querySelector('.arn-dbg-calib');
+        }
 
         document.body.appendChild(root);
 
@@ -1281,6 +1342,12 @@ class ARNavigationUI {
             });
         }
 
+        // Debug panel güncelle
+        this._updateDebugPanel({
+            heading: heading.toFixed(0) + '°',
+            source: ARNavigationUI._SOURCE_LABELS[this._compassSource] || this._compassSource
+        });
+
         // ── Kalibrasyon kapısı kontrolü ──
         // 'waiting': warmup verisi toplanıyor, ok güncelleme yapma
         // 'blocking': kalibrasyon overlay'i açık, ok güncelleme yapma
@@ -1321,6 +1388,7 @@ class ARNavigationUI {
                 this._aligned = true;
                 this._startProgress();
                 if (this.onAligned) this.onAligned();
+                this._updateDebugPanel({ status: 'Doğru yön ✓' });
             }
         } else {
             // Dönülecek yönü hesapla
@@ -1338,6 +1406,7 @@ class ARNavigationUI {
                 this._aligned = false;
                 this._resetProgress();
                 if (this.onMisaligned) this.onMisaligned();
+                this._updateDebugPanel({ status: 'Yönünüzü düzeltin…' });
             }
         }
     }
@@ -1381,6 +1450,7 @@ class ARNavigationUI {
             this._hideAllArrows();
 
             if (this.onCompleted) this.onCompleted();
+            this._updateDebugPanel({ status: 'Hedefe ulaşıldı ✅' });
 
             if (this.showPopup) {
                 this._showPopup();
@@ -1434,6 +1504,37 @@ class ARNavigationUI {
     _emitError(message) {
         console.error('ARNavigationUI:', message);
         if (this.onError) this.onError(message);
+        this._updateDebugPanel({ status: '⚠ ' + message });
+    }
+
+    // ================================================================
+    //  PRIVATE: DEBUG PANEL GÜNCELLEME
+    // ================================================================
+
+    /** @private */
+    static _SOURCE_LABELS = {
+        'sensor-api':        '🟢 Sensor API',
+        'absolute-event':    '🟢 Absolute',
+        'webkit-compass':    '🟢 WebKit',
+        'absolute-flag':     '🟡 Abs Flag',
+        'fallback-rotation': '🔴 Fallback',
+        'none':              '⚫ –'
+    };
+
+    /** @private */
+    static _CALIB_LABELS = { poor: '🔴 Kötü', fair: '🟡 Orta', good: '🟢 İyi' };
+
+    /**
+     * Debug paneli günceller.
+     * @param {Object} fields - Güncellenecek alanlar { status, target, heading, source, calib }
+     */
+    _updateDebugPanel(fields = {}) {
+        if (!this.showDebugPanel) return;
+        if (fields.status  !== undefined && this._els.dbgStatus)  this._els.dbgStatus.textContent  = fields.status;
+        if (fields.target  !== undefined && this._els.dbgTarget)  this._els.dbgTarget.textContent  = fields.target;
+        if (fields.heading !== undefined && this._els.dbgHeading) this._els.dbgHeading.textContent = fields.heading;
+        if (fields.source  !== undefined && this._els.dbgSource)  this._els.dbgSource.textContent  = fields.source;
+        if (fields.calib   !== undefined && this._els.dbgCalib)   this._els.dbgCalib.textContent   = fields.calib;
     }
 
     // ================================================================
@@ -1749,6 +1850,10 @@ class ARNavigationUI {
     _onCalibrationDegraded(quality, stdDev, jumpRate, magField) {
         const detail = { quality, stdDev, jumpRate, magField };
 
+        this._updateDebugPanel({
+            calib: `${ARNavigationUI._CALIB_LABELS[quality] || '?'} (σ=${stdDev.toFixed(1)}°)`
+        });
+
         // Callback — her durumda çağrılır
         if (this.onCalibrationNeeded) {
             this.onCalibrationNeeded(detail);
@@ -1766,6 +1871,10 @@ class ARNavigationUI {
     }
 
     _onCalibrationImproved(quality) {
+        this._updateDebugPanel({
+            calib: ARNavigationUI._CALIB_LABELS[quality] || '?'
+        });
+
         // Callback — her durumda çağrılır
         if (this.onCalibrationImproved) {
             this.onCalibrationImproved({ quality });

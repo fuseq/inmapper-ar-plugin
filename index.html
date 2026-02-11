@@ -4,368 +4,57 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>AR Direction Plugin - Demo</title>
-
-    <!-- Plugin dosyaları (sadece bu iki JS yeterli, CSS otomatik inject edilir) -->
     <script src="ar-direction.js"></script>
     <script src="ar-navigation-ui.js"></script>
-
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #f0f2f5;
-            min-height: 100vh;
-            padding: 16px;
-        }
-        .card {
-            max-width: 480px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 16px;
-            padding: 24px;
-            box-shadow: 0 2px 16px rgba(0,0,0,0.08);
-        }
-        h2 {
-            text-align: center;
-            margin-bottom: 20px;
-            font-size: 20px;
-            color: #222;
-        }
-        .info-panel {
-            background: #f8f9fa;
-            border-radius: 10px;
-            padding: 14px;
-            margin-bottom: 16px;
-        }
-        .info-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 7px 0;
-            border-bottom: 1px solid #eee;
-            font-size: 14px;
-        }
-        .info-row:last-child { border-bottom: none; }
-        .info-row .label { color: #666; }
-        .info-row .value { font-weight: 600; color: #2196F3; }
-        .btn-row {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 12px;
-        }
-        .btn {
-            flex: 1;
-            padding: 12px;
-            border: none;
-            border-radius: 12px;
-            font-size: 15px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: opacity 0.15s;
-        }
-        .btn:active { opacity: 0.8; }
-        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-        .btn-green { background: #4CAF50; color: white; }
-        .btn-red { background: #f44336; color: white; }
-        .btn-gray { background: #e8eaed; color: #333; }
-        .hidden { display: none !important; }
-        .section-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: #333;
-            margin-bottom: 8px;
-        }
-        textarea {
-            width: 100%;
-            height: 80px;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            font-family: 'Consolas', 'Courier New', monospace;
-            font-size: 12px;
-            resize: vertical;
-            margin-bottom: 8px;
-        }
-        .input-row {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 12px;
-        }
-        .input-row label { color: #666; font-size: 14px; }
-        .input-row input {
-            width: 60px;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 6px;
-            font-size: 14px;
-        }
-        .divider {
-            height: 1px;
-            background: #eee;
-            margin: 16px 0;
-        }
-        .code-example {
-            background: #f8f9fa;
-            border-radius: 8px;
-            padding: 12px;
-            font-family: 'Consolas', monospace;
-            font-size: 11px;
-            color: #555;
-            line-height: 1.5;
-            overflow-x: auto;
-            white-space: pre;
-        }
-    </style>
 </head>
 <body>
-    <div class="card">
-        <h2>🧭 AR Direction Plugin</h2>
+<script>
+    // ── Demo Segmentleri ──
+    const segments = [
+        { x1: 1378.973, y1: 1468.116, x2: 1406.603, y2: 1452.788 },
+        { x1: 1406.603, y1: 1452.788, x2: 1450.234, y2: 1420.567 },
+        { x1: 1450.234, y1: 1420.567, x2: 1520.456, y2: 1380.123 },
+        { x1: 1520.456, y1: 1380.123, x2: 1600.789, y2: 1350.456 },
+        { x1: 1600.789, y1: 1350.456, x2: 1680.123, y2: 1320.789 }
+    ];
 
-        <!-- Durum Paneli -->
-        <div class="info-panel">
-            <div class="info-row">
-                <span class="label">Durum:</span>
-                <span class="value" id="status">Hazır</span>
-            </div>
-            <div class="info-row">
-                <span class="label">Hedef Yön:</span>
-                <span class="value" id="target">-</span>
-            </div>
-            <div class="info-row">
-                <span class="label">Pusula:</span>
-                <span class="value" id="compass">-</span>
-            </div>
-            <div class="info-row">
-                <span class="label">Kaynak:</span>
-                <span class="value" id="compassSource">-</span>
-            </div>
-            <div class="info-row">
-                <span class="label">Kalibrasyon:</span>
-                <span class="value" id="calibration">-</span>
-            </div>
-        </div>
+    // ── Hesapla & Başlat ──
+    const dir = new ARDirectionCalculator({ segments, maxSegments: 5 }).calculate();
 
-        <!-- Kontrol Butonları -->
-        <div class="btn-row">
-            <button class="btn btn-green" id="btnStart" disabled>▶ AR Başlat</button>
-            <button class="btn btn-red hidden" id="btnStop">⏹ Durdur</button>
-        </div>
+    if (!dir) {
+        document.body.textContent = 'Yön hesaplanamadı';
+    } else {
+        let nav = null;
 
-        <div class="btn-row">
-            <button class="btn btn-gray" id="btnDemo">🎮 Demo Veri Yükle</button>
-        </div>
-
-        <div class="divider"></div>
-
-        <!-- Segment Girişi -->
-        <div class="section-title">📍 Line Segmentleri</div>
-        <textarea id="segments" placeholder='[{"x1":100,"y1":100,"x2":150,"y2":120}, ...]'></textarea>
-        <div class="input-row">
-            <label>Max Segment:</label>
-            <input type="number" id="maxSeg" value="5" min="1" max="20">
-        </div>
-        <button class="btn btn-gray" id="btnCalc" style="width:100%">Hesapla & Ayarla</button>
-
-        <div class="divider"></div>
-
-        <!-- Entegrasyon Örneği -->
-        <div class="section-title">💡 Entegrasyon</div>
-        <div class="code-example">// 1. Yön hesapla
-const calc = new ARDirectionCalculator({
-    segments: mySegments,
-    maxSegments: 5
-});
-const dir = calc.calculate();
-
-// 2. AR navigasyonu başlat (asset'li)
-const nav = new ARNavigationUI({
-    targetAngle: dir.compassAngle,
-    calibrationCheck: true,
-    showCalibrationUI: true,
-    arrowImages: { ... },
-    onCalibrationNeeded: (d) =&gt;
-        console.log('Kalibrasyon:', d.quality),
-    onCompleted: () =&gt; alert('Tamam!')
-});
-nav.start();
-// nav.calibrationQuality → 'good'
-// nav.getCalibrationReport()</div>
-    </div>
-
-    <script>
-        // ==================== DEMO VERİSİ ====================
-        const demoSegments = [
-            { x1: 1378.973, y1: 1468.116, x2: 1406.603, y2: 1452.788 },
-            { x1: 1406.603, y1: 1452.788, x2: 1450.234, y2: 1420.567 },
-            { x1: 1450.234, y1: 1420.567, x2: 1520.456, y2: 1380.123 },
-            { x1: 1520.456, y1: 1380.123, x2: 1600.789, y2: 1350.456 },
-            { x1: 1600.789, y1: 1350.456, x2: 1680.123, y2: 1320.789 }
-        ];
-
-        // ==================== DEĞİŞKENLER ====================
-        let calculator = null;
-        let navigation = null;
-        let calculatedDirection = null;
-
-        // ==================== DOM REF'LERİ ====================
-        const elStatus = document.getElementById('status');
-        const elTarget = document.getElementById('target');
-        const elCompass = document.getElementById('compass');
-        const elCalibration = document.getElementById('calibration');
-        const elCompassSource = document.getElementById('compassSource');
-        const btnStart = document.getElementById('btnStart');
-        const btnStop = document.getElementById('btnStop');
-
-        // ==================== SEGMENT İŞLEMLERİ ====================
-
-        /**
-         * Segmentleri hesapla ve UI'ı güncelle
-         */
-        function applySegments(segments) {
-            const maxSeg = parseInt(document.getElementById('maxSeg').value) || 5;
-
-            // 1. Yön hesaplama (ARDirectionCalculator - saf matematik)
-            calculator = new ARDirectionCalculator({
-                segments: segments,
-                maxSegments: maxSeg
-            });
-
-            calculatedDirection = calculator.calculate();
-
-            if (calculatedDirection) {
-                elTarget.textContent =
-                    `${calculatedDirection.compass} (${calculatedDirection.compassAngle.toFixed(0)}°)`;
-                elStatus.textContent = `${segments.length} segment → yön hesaplandı`;
-                btnStart.disabled = false;
+        function startAR() {
+            if (nav) {
+                nav.setTargetAngle(dir.compassAngle);
             } else {
-                elTarget.textContent = 'Hesaplanamadı';
-                elStatus.textContent = 'Hata';
-                btnStart.disabled = true;
-            }
-        }
-
-        // ==================== DEMO VERİ BUTONU ====================
-        document.getElementById('btnDemo').addEventListener('click', () => {
-            document.getElementById('segments').value = JSON.stringify(demoSegments, null, 2);
-            applySegments(demoSegments);
-        });
-
-        // ==================== HESAPLA BUTONU ====================
-        document.getElementById('btnCalc').addEventListener('click', () => {
-            try {
-                const segs = JSON.parse(document.getElementById('segments').value);
-                if (!Array.isArray(segs) || segs.length < 1) {
-                    throw new Error('En az 1 segment gerekli');
-                }
-                for (const seg of segs) {
-                    if (seg.x1 === undefined || seg.y1 === undefined ||
-                        seg.x2 === undefined || seg.y2 === undefined) {
-                        throw new Error('Her segment {x1, y1, x2, y2} formatında olmalı');
-                    }
-                }
-                applySegments(segs);
-            } catch (e) {
-                alert('Geçersiz format: ' + e.message);
-            }
-        });
-
-        // ==================== AR BAŞLAT ====================
-        btnStart.addEventListener('click', () => {
-            if (!calculatedDirection) return;
-
-            if (navigation) {
-                // Mevcut instance'ı yeniden kullan — pusula referans çerçevesi korunur
-                navigation.setTargetAngle(calculatedDirection.compassAngle);
-            } else {
-                // İlk kez: yeni instance oluştur
-                navigation = new ARNavigationUI({
-                    targetAngle: calculatedDirection.compassAngle,
+                nav = new ARNavigationUI({
+                    targetAngle: dir.compassAngle,
                     tolerance: 20,
                     progressDuration: 3,
                     showPopup: true,
                     popupMessage: 'Hedefe ulaştınız!',
                     popupButtonText: 'Tamam',
-
+                    showDebugPanel: true,
                     arrowImages: {
                         left: './assets/left_arrow.png',
                         right: './assets/right_arrow.png',
                         forward: './assets/ileri.png',
                         forwardPerspective: './assets/ileri_perspective.png'
                     },
-
                     popupImage: './assets/check.png',
                     loadingImage: './assets/location.gif',
-
-                    onCompassUpdate: (data) => {
-                        elCompass.textContent = `${data.heading.toFixed(0)}°`;
-                        const sourceLabels = {
-                            'sensor-api': '🟢 Sensor API',
-                            'absolute-event': '🟢 Absolute Event',
-                            'webkit-compass': '🟢 WebKit Compass',
-                            'absolute-flag': '🟡 Absolute Flag',
-                            'fallback-rotation': '🔴 Fallback',
-                            'none': '⚫ Yok'
-                        };
-                        elCompassSource.textContent = sourceLabels[data.source] || data.source;
-                    },
-
-                    onAligned: () => {
-                        elStatus.textContent = 'Doğru yöne bakıyorsunuz ✓';
-                    },
-
-                    onMisaligned: () => {
-                        elStatus.textContent = 'Yönünüzü düzeltin...';
-                    },
-
-                    onCompleted: () => {
-                        elStatus.textContent = 'Hedefe ulaşıldı! ✅';
-                    },
-
-                    onPopupDismiss: () => {
-                        // Popup kapatıldığında UI'ı sıfırla
-                        // ❗ navigation = null YAPMA — instance yeniden kullanılacak
-                        btnStart.classList.remove('hidden');
-                        btnStop.classList.add('hidden');
-                        elStatus.textContent = 'Tamamlandı';
-                    },
-
-                    onCalibrationNeeded: (data) => {
-                        const labels = { poor: '🔴 Kötü', fair: '🟡 Orta', good: '🟢 İyi' };
-                        elCalibration.textContent =
-                            `${labels[data.quality] || '?'} (σ=${data.stdDev.toFixed(1)}°)`;
-                        console.log('Kalibrasyon gerekli:', data);
-                    },
-
-                    onCalibrationImproved: (data) => {
-                        const labels = { poor: '🔴 Kötü', fair: '🟡 Orta', good: '🟢 İyi' };
-                        elCalibration.textContent = labels[data.quality] || '?';
-                        console.log('Kalibrasyon iyileşti:', data.quality);
-                    },
-
-                    onError: (err) => {
-                        elStatus.textContent = 'Hata: ' + err;
-                    }
+                    onPopupDismiss: () => startAR(),
+                    onError: (e) => console.error('AR Hata:', e)
                 });
             }
+            nav.start();
+        }
 
-            navigation.start();
-
-            // Butonları güncelle
-            btnStart.classList.add('hidden');
-            btnStop.classList.remove('hidden');
-            elStatus.textContent = 'AR Çalışıyor...';
-        });
-
-        // ==================== DURDUR ====================
-        btnStop.addEventListener('click', () => {
-            if (navigation) {
-                navigation.stop(); // destroy() DEĞİL — pusula canlı kalır
-            }
-            btnStart.classList.remove('hidden');
-            btnStop.classList.add('hidden');
-            elStatus.textContent = 'Durduruldu';
-            elCompass.textContent = '-';
-        });
-    </script>
+        startAR();
+    }
+</script>
 </body>
 </html>
