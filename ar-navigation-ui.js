@@ -293,164 +293,7 @@ class ARNavigationUI {
             transform: scale(0.96);
         }
 
-        /* ===== KALİBRASYON OVERLAY ===== */
-        .arn-calibration {
-            position: fixed;
-            top: 0; left: 0;
-            width: 100vw; height: 100vh;
-            background: rgba(0, 0, 0, 0.85);
-            backdrop-filter: blur(4px);
-            display: none;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            z-index: 9050;
-            padding: 30px;
-        }
-        .arn-calibration.arn-show {
-            display: flex;
-        }
-
-        /* Figure-8 animasyonu */
-        .arn-calibration-figure8 {
-            width: 120px;
-            height: 120px;
-            position: relative;
-            margin-bottom: 24px;
-        }
-        .arn-calibration-phone {
-            width: 36px;
-            height: 56px;
-            border: 3px solid #fff;
-            border-radius: 8px;
-            position: absolute;
-            animation: arnFigure8 4s ease-in-out infinite;
-        }
-        .arn-calibration-phone::after {
-            content: '';
-            position: absolute;
-            bottom: 4px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 10px;
-            height: 10px;
-            border: 2px solid rgba(255,255,255,0.6);
-            border-radius: 50%;
-        }
-        @keyframes arnFigure8 {
-            0%   { top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(0deg); }
-            12%  { top: 15%; left: 80%; transform: translate(-50%, -50%) rotate(45deg); }
-            25%  { top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(90deg); }
-            37%  { top: 85%; left: 20%; transform: translate(-50%, -50%) rotate(180deg); }
-            50%  { top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(180deg); }
-            62%  { top: 15%; left: 20%; transform: translate(-50%, -50%) rotate(225deg); }
-            75%  { top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(270deg); }
-            87%  { top: 85%; left: 80%; transform: translate(-50%, -50%) rotate(315deg); }
-            100% { top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(360deg); }
-        }
-        /* 8 yolu izi */
-        .arn-calibration-path {
-            position: absolute;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-        }
-        .arn-calibration-path svg {
-            width: 100%; height: 100%;
-        }
-        .arn-calibration-path path {
-            fill: none;
-            stroke: rgba(255,255,255,0.15);
-            stroke-width: 2;
-        }
-
-        .arn-calibration-title {
-            color: #fff;
-            font-size: 18px;
-            font-weight: 700;
-            margin-bottom: 8px;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        .arn-calibration-text {
-            color: rgba(255,255,255,0.8);
-            font-size: 14px;
-            text-align: center;
-            line-height: 1.5;
-            max-width: 280px;
-            margin-bottom: 20px;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        .arn-calibration-quality {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 20px;
-        }
-        .arn-calibration-dots {
-            display: flex;
-            gap: 6px;
-        }
-        .arn-calibration-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            background: rgba(255,255,255,0.2);
-            transition: background 0.3s ease;
-        }
-        .arn-calibration-dot.arn-dot-active {
-            background: #4CAF50;
-        }
-        .arn-calibration-dot.arn-dot-warn {
-            background: #FF9800;
-        }
-        .arn-calibration-dot.arn-dot-bad {
-            background: #f44336;
-        }
-        .arn-calibration-label {
-            color: rgba(255,255,255,0.7);
-            font-size: 12px;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        .arn-calibration-skip {
-            padding: 8px 20px;
-            border: 1px solid rgba(255,255,255,0.3);
-            border-radius: 20px;
-            background: transparent;
-            color: rgba(255,255,255,0.6);
-            font-size: 13px;
-            cursor: pointer;
-            transition: all 0.15s;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        .arn-calibration-skip:active {
-            background: rgba(255,255,255,0.1);
-        }
-
-        /* ===== KALİBRASYON BANNER (kompakt, AR sırasında) ===== */
-        .arn-calib-banner {
-            position: fixed;
-            top: 12px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(244, 67, 54, 0.9);
-            color: white;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-            z-index: 9015;
-            display: none;
-            align-items: center;
-            gap: 6px;
-            cursor: pointer;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            backdrop-filter: blur(4px);
-        }
-        .arn-calib-banner.arn-show {
-            display: flex;
-        }
-        .arn-calib-banner.arn-warn {
-            background: rgba(255, 152, 0, 0.9);
-        }
+        /* Kalibrasyon UI kaldırıldı — bilgi sadece debug panelden izlenir */
 
         /* ===== DEBUG PANEL ===== */
         .arn-debug {
@@ -533,7 +376,6 @@ class ARNavigationUI {
      * @param {Function} [options.onStop]               - AR durdurulduğunda
      * @param {Function} [options.onError]              - Hata oluştuğunda (string)
      * @param {boolean}  [options.calibrationCheck=true] - Kalibrasyon kalitesi izlensin mi
-     * @param {boolean}  [options.showCalibrationUI=true]- Kalibrasyon gerektiğinde UI gösterilsin mi
      * @param {Function} [options.onCalibrationNeeded]   - Kalibrasyon gerektiğinde ({quality, stdDev, magField, jumpRate})
      * @param {Function} [options.onCalibrationImproved] - Kalibrasyon iyileştiğinde ({quality})
      */
@@ -552,7 +394,6 @@ class ARNavigationUI {
 
         // Kalibrasyon konfigürasyonu
         this.calibrationCheck = options.calibrationCheck !== false;
-        this.showCalibrationUI = options.showCalibrationUI !== false;
 
         // Debug panel (varsayılan kapalı, açıkça true verilmeli)
         this.showDebugPanel = options.showDebugPanel === true;
@@ -594,10 +435,7 @@ class ARNavigationUI {
         this._compassTimeout = null;
         this._orientationSensor = null; // AbsoluteOrientationSensor (Generic Sensor API)
 
-        // Kalibrasyon kapısı: 'none' | 'waiting' | 'blocking' | 'passed'
-        // 'waiting'  → warmup verisi bekleniyor
-        // 'blocking' → kalibrasyon kötü, overlay gösterildi, navigasyon engelli
-        // 'passed'   → kapı geçildi, navigasyon serbest
+        // Kalibrasyon kapısı (overlay kaldırıldı — sadece debug panel bilgi verir)
         this._calibrationGate = 'passed';
 
         // Kalibrasyon durumu
@@ -675,11 +513,8 @@ class ARNavigationUI {
         this._completed = false;
         this._aligned = false;
 
-        // ── Kalibrasyon kapısı başlangıç durumu ──
-        // calibrationCheck + showCalibrationUI aktifse kapı devreye girer
-        this._calibrationGate = (this.calibrationCheck && this.showCalibrationUI)
-            ? 'waiting'   // Warmup verisi toplanana kadar bekle
-            : 'passed';   // Kalibrasyon kontrolü kapalı, doğrudan navigasyon
+        // Kalibrasyon kapısı artık yok — kalite bilgisi sadece debug panelde gösterilir
+        this._calibrationGate = 'passed';
 
         // Root'u göster
         this._els.root.classList.add('arn-active');
@@ -688,18 +523,6 @@ class ARNavigationUI {
         if (this._compassActive) {
             // Pusula zaten çalışıyor, heading güncel — loading gereksiz
             this._compassReady = true;
-
-            // ── Startup kalibrasyon kapısı (pusula aktif, veri mevcut) ──
-            if (this._calibrationGate === 'waiting') {
-                const T = ARNavigationUI.CALIBRATION_THRESHOLDS;
-                if (this._calibration.rawSamples.length >= T.WARMUP_SAMPLES) {
-                    // Yeterli veri var — hemen kalite değerlendir
-                    // _handleCalibrationGate() evaluateCalibrationQuality içinden
-                    // 'waiting' → 'blocking' veya 'passed' geçişini yapar
-                    this._evaluateCalibrationQuality();
-                }
-                // else: warmup verisi yetersiz, _handleCompass'ta çözülecek
-            }
         } else {
             // İlk başlatma: pusula henüz aktif değil, loading göster
             this._compassReady = false;
@@ -734,8 +557,6 @@ class ARNavigationUI {
         this._hideAllArrows();
         this._resetProgress();
         this._hidePopup();
-        this._hideCalibrationOverlay();
-        this._hideCalibBanner();
         this._els.loading.classList.remove('arn-show');
 
         this._els.root.classList.remove('arn-active');
@@ -815,34 +636,7 @@ class ARNavigationUI {
                     <button class="arn-popup-btn">${this.popupButtonText}</button>
                 </div>
             </div>
-            <div class="arn-calibration">
-                <div class="arn-calibration-figure8">
-                    <div class="arn-calibration-path">
-                        <svg viewBox="0 0 120 120">
-                            <path d="M60 60 C60 30, 100 30, 100 60 C100 90, 60 90, 60 60 C60 30, 20 30, 20 60 C20 90, 60 90, 60 60"/>
-                        </svg>
-                    </div>
-                    <div class="arn-calibration-phone"></div>
-                </div>
-                <div class="arn-calibration-title">Pusula Kalibrasyonu Gerekli</div>
-                <div class="arn-calibration-text">
-                    Telefonunuzu havada <b>8 (∞) şekli</b> çizerek tüm eksenlerde döndürün.
-                    Bu işlem manyetometreyi kalibre eder.
-                </div>
-                <div class="arn-calibration-quality">
-                    <div class="arn-calibration-dots">
-                        <div class="arn-calibration-dot" data-dot="0"></div>
-                        <div class="arn-calibration-dot" data-dot="1"></div>
-                        <div class="arn-calibration-dot" data-dot="2"></div>
-                        <div class="arn-calibration-dot" data-dot="3"></div>
-                    </div>
-                    <span class="arn-calibration-label">Kalibrasyon kalitesi</span>
-                </div>
-                <button class="arn-calibration-skip">Geç →</button>
-            </div>
-            <div class="arn-calib-banner">
-                <span>⚠ Pusula kalibrasyonu düşük</span>
-            </div>
+            <!-- Kalibrasyon bilgisi debug panel üzerinden izlenir -->
         `;
 
         // ── Debug Panel (opsiyonel) ──
@@ -885,11 +679,6 @@ class ARNavigationUI {
         this._els.popup = root.querySelector('.arn-popup');
         this._els.popupMessage = root.querySelector('.arn-popup-message');
         this._els.popupBtn = root.querySelector('.arn-popup-btn');
-        this._els.calibration = root.querySelector('.arn-calibration');
-        this._els.calibDots = root.querySelectorAll('.arn-calibration-dot');
-        this._els.calibSkip = root.querySelector('.arn-calibration-skip');
-        this._els.calibBanner = root.querySelector('.arn-calib-banner');
-
         // İlerleme süresi ayarla
         this._els.progressBar.style.transition =
             `stroke-dashoffset ${this.progressDuration}s linear`;
@@ -899,17 +688,6 @@ class ARNavigationUI {
             this._hidePopup();
             this.stop();
             if (this.onPopupDismiss) this.onPopupDismiss();
-        });
-
-        // Kalibrasyon skip handler — kapıyı geç, navigasyona devam et
-        this._els.calibSkip.addEventListener('click', () => {
-            this._calibrationGate = 'passed';
-            this._hideCalibrationOverlay();
-        });
-
-        // Banner tıklandığında kalibrasyon ekranını göster
-        this._els.calibBanner.addEventListener('click', () => {
-            this._showCalibrationOverlay();
         });
     }
 
@@ -1311,8 +1089,8 @@ class ARNavigationUI {
 
     _handleCompass(rawHeading, beta) {
         // ── Kalibrasyon sample kaydı (filtreleme öncesi ham veri) ──
-        // _recordCalibrationSample → _evaluateCalibrationQuality → _handleCalibrationGate
-        // zinciri kalibrasyon kapısı geçişlerini otomatik yönetir.
+        // _recordCalibrationSample → _evaluateCalibrationQuality zinciri
+        // kalibrasyon kalitesini takip eder, debug panelde gösterir.
         this._recordCalibrationSample(rawHeading);
 
         // ── HER ZAMAN heading'i güncelle (stop durumunda bile) ──
@@ -1347,14 +1125,6 @@ class ARNavigationUI {
             heading: heading.toFixed(0) + '°',
             source: ARNavigationUI._SOURCE_LABELS[this._compassSource] || this._compassSource
         });
-
-        // ── Kalibrasyon kapısı kontrolü ──
-        // 'waiting': warmup verisi toplanıyor, ok güncelleme yapma
-        // 'blocking': kalibrasyon overlay'i açık, ok güncelleme yapma
-        // 'passed': kapı geçildi, navigasyon serbest
-        if (this._calibrationGate === 'waiting' || this._calibrationGate === 'blocking') {
-            return;
-        }
 
         // Okları güncelle
         this._updateArrows();
@@ -1577,10 +1347,10 @@ class ARNavigationUI {
     }
 
     /**
-     * Kalibrasyon ekranını manuel olarak gösterir
+     * Kalibrasyon kalitesini rapor eder (artık overlay yok, debug panel bilgi verir)
      */
     requestCalibration() {
-        this._showCalibrationOverlay();
+        this._evaluateCalibrationQuality();
     }
 
     // ────────────────────────────────────────
@@ -1612,8 +1382,6 @@ class ARNavigationUI {
      */
     _stopCalibrationMonitor() {
         this._stopMagnetometer();
-        this._hideCalibrationOverlay();
-        this._hideCalibBanner();
     }
 
     // ────────────────────────────────────────
@@ -1751,11 +1519,6 @@ class ARNavigationUI {
         const prevQuality = cal.quality;
         cal.quality = quality;
 
-        // ── Kalibrasyon kapısı state machine ──
-        // start() sırasında 'waiting' → 'blocking' veya 'passed' geçişi
-        // 'blocking' sırasında kalite iyileşirse → 'passed'
-        this._handleCalibrationGate(quality);
-
         // Kalite düştüyse → uyar
         if (quality === Q.POOR && prevQuality !== Q.POOR) {
             this._onCalibrationDegraded(quality, stdDev, jumpRate, magField);
@@ -1765,8 +1528,7 @@ class ARNavigationUI {
             this._onCalibrationImproved(quality);
         }
 
-        // Kalibrasyon UI'ını güncelle (gösteriliyorsa)
-        this._updateCalibrationDots(quality);
+        // Kalibrasyon durumunu debug panele yansıt (quality _onCalibrationDegraded/_onCalibrationImproved'da güncellenir)
     }
 
     // ────────────────────────────────────────
@@ -1818,31 +1580,6 @@ class ARNavigationUI {
      *
      * @param {string} quality - Yeni kalibrasyon kalite seviyesi
      */
-    _handleCalibrationGate(quality) {
-        const Q = ARNavigationUI.CALIBRATION_QUALITY;
-
-        if (this._calibrationGate === 'waiting') {
-            if (quality === Q.POOR) {
-                // Kalibrasyon kötü → overlay göster, navigasyonu engelle
-                this._calibrationGate = 'blocking';
-                if (this.showCalibrationUI) {
-                    this._showCalibrationOverlay();
-                }
-            } else {
-                // Kalibrasyon yeterli → navigasyona geç
-                this._calibrationGate = 'passed';
-            }
-        } else if (this._calibrationGate === 'blocking') {
-            if (quality !== Q.POOR) {
-                // Kalibrasyon iyileşti → kapıyı aç, overlay kapat
-                this._calibrationGate = 'passed';
-                this._hideCalibrationOverlay();
-            }
-            // Hâlâ POOR ise → blocking kalır, overlay açık
-        }
-        // 'passed' veya 'none' ise gate müdahale etmez
-    }
-
     // ────────────────────────────────────────
     //  PRIVATE: Kalibrasyon Olayları
     // ────────────────────────────────────────
@@ -1854,19 +1591,8 @@ class ARNavigationUI {
             calib: `${ARNavigationUI._CALIB_LABELS[quality] || '?'} (σ=${stdDev.toFixed(1)}°)`
         });
 
-        // Callback — her durumda çağrılır
         if (this.onCalibrationNeeded) {
             this.onCalibrationNeeded(detail);
-        }
-
-        // Gate aşamasındaysa UI yönetimi gate tarafından yapılır
-        if (this._calibrationGate === 'waiting' || this._calibrationGate === 'blocking') {
-            return;
-        }
-
-        // Gate geçildikten sonra → sadece kompakt banner göster (overlay değil)
-        if (this.showCalibrationUI && this._running) {
-            this._showCalibBanner(quality);
         }
     }
 
@@ -1875,77 +1601,9 @@ class ARNavigationUI {
             calib: ARNavigationUI._CALIB_LABELS[quality] || '?'
         });
 
-        // Callback — her durumda çağrılır
         if (this.onCalibrationImproved) {
             this.onCalibrationImproved({ quality });
         }
-
-        // Gate aşamasındaysa UI yönetimi gate tarafından yapılır
-        if (this._calibrationGate === 'waiting' || this._calibrationGate === 'blocking') {
-            return;
-        }
-
-        // Gate geçildikten sonra → banner'ı kapat
-        if (quality === ARNavigationUI.CALIBRATION_QUALITY.GOOD ||
-            quality === ARNavigationUI.CALIBRATION_QUALITY.FAIR) {
-            this._hideCalibBanner();
-        }
-    }
-
-    // ────────────────────────────────────────
-    //  PRIVATE: Kalibrasyon UI
-    // ────────────────────────────────────────
-
-    _showCalibrationOverlay() {
-        if (this._els.calibration) {
-            this._els.calibration.classList.add('arn-show');
-            this._updateCalibrationDots(this._calibration.quality);
-        }
-    }
-
-    _hideCalibrationOverlay() {
-        if (this._els.calibration) {
-            this._els.calibration.classList.remove('arn-show');
-        }
-    }
-
-    _showCalibBanner(quality) {
-        if (!this._els.calibBanner) return;
-        this._els.calibBanner.classList.add('arn-show');
-        this._els.calibBanner.classList.toggle('arn-warn',
-            quality === ARNavigationUI.CALIBRATION_QUALITY.FAIR);
-    }
-
-    _hideCalibBanner() {
-        if (this._els.calibBanner) {
-            this._els.calibBanner.classList.remove('arn-show');
-        }
-    }
-
-    /**
-     * Kalibrasyon kalitesi noktalarını günceller (4 nokta göstergesi)
-     * POOR=1 kırmızı, FAIR=2 turuncu, GOOD=4 yeşil
-     */
-    _updateCalibrationDots(quality) {
-        if (!this._els.calibDots || this._els.calibDots.length === 0) return;
-
-        const Q = ARNavigationUI.CALIBRATION_QUALITY;
-        let activeCount = 0;
-        let colorClass = '';
-
-        switch (quality) {
-            case Q.POOR:    activeCount = 1; colorClass = 'arn-dot-bad';    break;
-            case Q.FAIR:    activeCount = 2; colorClass = 'arn-dot-warn';   break;
-            case Q.GOOD:    activeCount = 4; colorClass = 'arn-dot-active'; break;
-            default:        activeCount = 0; break;
-        }
-
-        this._els.calibDots.forEach((dot, i) => {
-            dot.classList.remove('arn-dot-active', 'arn-dot-warn', 'arn-dot-bad');
-            if (i < activeCount) {
-                dot.classList.add(colorClass);
-            }
-        });
     }
 
     // ────────────────────────────────────────
