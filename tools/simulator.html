@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AR Plugin Simülatörü</title>
+<script src="../ar-direction.js"></script>
+<script src="../ar-navigation-ui.js"></script>
+<style>
+    body {
+        margin: 0; display: flex; min-height: 100vh;
+        background: #0d1117; color: #e6edf3;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    .panel {
+        width: 380px; flex-shrink: 0; padding: 24px; overflow-y: auto;
+        max-height: 100vh; box-sizing: border-box;
+        background: #161b22; border-right: 1px solid #30363d; z-index: 99999;
+        position: relative;
+    }
+    h1 { font-size: 17px; margin: 0 0 4px; }
+    .sub { font-size: 12px; color: #8b949e; margin: 0 0 20px; line-height: 1.5; }
+    h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px;
+         color: #8b949e; margin: 22px 0 10px; }
+    label { display: block; font-size: 12px; color: #8b949e; margin-bottom: 4px; }
+    .val { float: right; color: #58a6ff; font-weight: 600; font-variant-numeric: tabular-nums; }
+    input[type=range] { width: 100%; margin-bottom: 14px; accent-color: #58a6ff; }
+    .stat { display: flex; justify-content: space-between; font-size: 13px;
+            padding: 6px 0; border-bottom: 1px solid #21262d; }
+    .stat span:last-child { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .ok { color: #3fb950; } .warn { color: #d29922; } .bad { color: #f85149; }
+    button {
+        width: 100%; padding: 11px; margin-top: 8px; border: none; border-radius: 8px;
+        background: #238636; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    button.secondary { background: #21262d; border: 1px solid #30363d; }
+    .scene { flex: 1; display: flex; align-items: center; justify-content: center; }
+    canvas { background: #0d1117; }
+    .hintbox { font-size: 11px; color: #6e7681; line-height: 1.6; margin-top: 14px; }
+</style>
+</head>
+<body>
+
+<div class="panel">
+    <h1>AR Plugin Simülatörü</h1>
+    <p class="sub">Telefon ve mekan olmadan, sentetik sensör verisiyle ok
+        mantığını ve filtreyi test eder. Kaydırıcılar sanal telefonu döndürür.</p>
+
+    <h2>Sanal telefon</h2>
+    <label>Azimut (alpha) <span class="val" id="vAlpha">0°</span></label>
+    <input type="range" id="alpha" min="0" max="359" value="0">
+
+    <label>Eğim (beta) <span class="val" id="vBeta">90°</span></label>
+    <input type="range" id="beta" min="-180" max="180" value="90">
+
+    <label>Yatırma (gamma) <span class="val" id="vGamma">0°</span></label>
+    <input type="range" id="gamma" min="-90" max="90" value="0">
+
+    <label>Sensör gürültüsü <span class="val" id="vNoise">0.0°</span></label>
+    <input type="range" id="noise" min="0" max="50" value="0">
+
+    <label>Örnekleme hızı <span class="val" id="vHz">30 Hz</span></label>
+    <input type="range" id="hz" min="5" max="60" value="30">
+
+    <h2>Hedef</h2>
+    <label>Harita açısı <span class="val" id="vTarget">45°</span></label>
+    <input type="range" id="target" min="0" max="359" value="45">
+
+    <label>mapNorthOffset <span class="val" id="vOffset">0°</span></label>
+    <input type="range" id="offset" min="0" max="359" value="0">
+
+    <h2>Plugin durumu</h2>
+    <div class="stat"><span>Heading</span><span id="sHeading">–</span></div>
+    <div class="stat"><span>Güven</span><span id="sConf">–</span></div>
+    <div class="stat"><span>Kaynak</span><span id="sSource">–</span></div>
+    <div class="stat"><span>Efektif hedef</span><span id="sTarget">–</span></div>
+    <div class="stat"><span>Fark</span><span id="sDelta">–</span></div>
+    <div class="stat"><span>Hizalı</span><span id="sAligned">–</span></div>
+    <div class="stat"><span>Kalibrasyon</span><span id="sCalib">–</span></div>
+
+    <button id="startBtn">AR Katmanını Başlat</button>
+    <button id="spinBtn" class="secondary">Otomatik Döndür</button>
+
+    <p class="hintbox">
+        Denenecekler: eğimi 0'a getirin (kamera zemine bakar) — güven düşer,
+        heading donar ve ipucu çıkar. Gürültüyü artırıp eğimi 90'da tutun —
+        heading kararlı kalmalı. Yatırmayı ±90 yapın — heading değişmemeli.
+    </p>
+</div>
+
+<div class="scene">
+    <canvas id="map" width="420" height="420"></canvas>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const ctl = {
+    alpha: $('alpha'), beta: $('beta'), gamma: $('gamma'),
+    noise: $('noise'), hz: $('hz'), target: $('target'), offset: $('offset')
+};
+
+let nav = null;
+let spinning = false;
+let timer = null;
+
+function noiseAmt() { return ctl.noise.value / 10; }
+function jitter() { return (Math.random() - 0.5) * noiseAmt(); }
+
+// Sentetik deviceorientationabsolute olayı üret
+function emit() {
+    const e = new Event('deviceorientationabsolute');
+    e.absolute = true;
+    e.alpha = (Number(ctl.alpha.value) + jitter() + 360) % 360;
+    e.beta  = Number(ctl.beta.value) + jitter();
+    e.gamma = Number(ctl.gamma.value) + jitter();
+    window.dispatchEvent(e);
+}
+
+function restartTimer() {
+    if (timer) clearInterval(timer);
+    timer = setInterval(() => {
+        if (spinning) {
+            ctl.alpha.value = (Number(ctl.alpha.value) + 1.5) % 360;
+        }
+        emit();
+        refresh();
+    }, 1000 / Number(ctl.hz.value));
+}
+
+function refresh() {
+    $('vAlpha').textContent = ctl.alpha.value + '°';
+    $('vBeta').textContent  = ctl.beta.value + '°';
+    $('vGamma').textContent = ctl.gamma.value + '°';
+    $('vNoise').textContent = noiseAmt().toFixed(1) + '°';
+    $('vHz').textContent    = ctl.hz.value + ' Hz';
+    $('vTarget').textContent = ctl.target.value + '°';
+    $('vOffset').textContent = ctl.offset.value + '°';
+
+    if (nav) {
+        nav.targetAngle = Number(ctl.target.value);
+        nav.mapNorthOffset = Number(ctl.offset.value);
+
+        const h = nav.currentHeading, t = nav.effectiveTargetAngle;
+        const delta = Math.abs(((h - t + 180) % 360 + 360) % 360 - 180);
+        const conf = nav.currentConfidence;
+
+        $('sHeading').textContent = h.toFixed(1) + '°';
+        $('sConf').textContent = conf.toFixed(2);
+        $('sConf').className = conf > 0.4 ? 'ok' : conf > 0.15 ? 'warn' : 'bad';
+        $('sSource').textContent = nav.compassSource;
+        $('sTarget').textContent = t.toFixed(1) + '°';
+        $('sDelta').textContent = delta.toFixed(1) + '°';
+        $('sAligned').textContent = nav.isAligned ? 'evet' : 'hayır';
+        $('sAligned').className = nav.isAligned ? 'ok' : '';
+        $('sCalib').textContent = nav.calibrationQuality;
+    }
+    draw();
+}
+
+// Üstten görünüm: hedef yönü ve cihazın baktığı yön
+function draw() {
+    const c = $('map'), g = c.getContext('2d');
+    const cx = c.width / 2, cy = c.height / 2, R = 165;
+    g.clearRect(0, 0, c.width, c.height);
+
+    g.strokeStyle = '#30363d'; g.lineWidth = 1;
+    g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.stroke();
+
+    g.fillStyle = '#6e7681'; g.font = '12px sans-serif'; g.textAlign = 'center';
+    [['K', 0], ['D', 90], ['G', 180], ['B', 270]].forEach(([lbl, deg]) => {
+        const a = (deg - 90) * Math.PI / 180;
+        g.fillText(lbl, cx + Math.cos(a) * (R + 16), cy + Math.sin(a) * (R + 16) + 4);
+    });
+
+    if (!nav) return;
+    const arrow = (deg, color, len, width) => {
+        const a = (deg - 90) * Math.PI / 180;
+        g.strokeStyle = color; g.lineWidth = width; g.lineCap = 'round';
+        g.beginPath(); g.moveTo(cx, cy);
+        g.lineTo(cx + Math.cos(a) * len, cy + Math.sin(a) * len); g.stroke();
+    };
+    // Tolerans dilimi
+    const t = nav.effectiveTargetAngle;
+    g.fillStyle = 'rgba(63,185,80,.15)';
+    g.beginPath(); g.moveTo(cx, cy);
+    g.arc(cx, cy, R, (t - nav.tolerance - 90) * Math.PI / 180,
+                     (t + nav.tolerance - 90) * Math.PI / 180);
+    g.closePath(); g.fill();
+
+    arrow(t, '#3fb950', R - 10, 3);                     // hedef
+    arrow(nav.currentHeading, '#58a6ff', R - 45, 6);    // cihaz
+}
+
+$('startBtn').addEventListener('click', () => {
+    if (nav) { nav.destroy(); nav = null; $('startBtn').textContent = 'AR Katmanını Başlat'; return; }
+    nav = new ARNavigationUI({
+        targetAngle: Number(ctl.target.value),
+        mapNorthOffset: Number(ctl.offset.value),
+        tolerance: 12,
+        manageCamera: false,      // masaüstünde kamera yok
+        showDebugPanel: true,
+        showPopup: false
+    });
+    nav.start();
+    $('startBtn').textContent = 'Durdur';
+});
+
+$('spinBtn').addEventListener('click', () => {
+    spinning = !spinning;
+    $('spinBtn').textContent = spinning ? 'Döndürmeyi Durdur' : 'Otomatik Döndür';
+});
+
+Object.values(ctl).forEach(el => el.addEventListener('input', () => {
+    if (el === ctl.hz) restartTimer();
+    refresh();
+}));
+
+restartTimer();
+refresh();
+</script>
+</body>
+</html>

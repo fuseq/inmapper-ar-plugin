@@ -59,25 +59,53 @@ class ARNavigationUI {
         GOOD:    'good'       // İyi kalibrasyon
     };
 
+    /**
+     * Heading filtreleme sabitleri.
+     *
+     * Filtre örnekleme hızından bağımsız çalışır: buffer uzunluğu yerine zaman
+     * sabiti, sabit derece yerine açısal hız limiti kullanılır. Böylece 60Hz
+     * ateşleyen bir iPhone ile 15Hz ateşleyen bir Android aynı davranışı gösterir.
+     */
+    static HEADING = {
+        // Yatay düzleme projeksiyon büyüklüğü (0-1). Kamera ufka paralelken 1,
+        // tavana/zemine bakarken 0. Sensör gürültüsü heading'e 1/confidence
+        // oranında yansır, dolayısıyla bu değer okumanın güvenilirliğidir.
+        MIN_CONFIDENCE: 0.15,        // Altında heading anlamsız (~9° hata/0.5° gürültü)
+        LOW_CONFIDENCE: 0.40,        // Altında kullanıcı uyarılır ("telefonu dikleştir")
+
+        SMOOTHING_MS: 150,           // Dairesel ortalama zaman penceresi
+        MAX_BUFFER: 30,              // Güvenlik tavanı (çok yüksek örnekleme hızı için)
+
+        // Fiziksel olarak mümkün max açısal hız. Bunu aşan değişim sensör
+        // sıçramasıdır, gerçek hareket değil.
+        MAX_TURN_RATE_DPS: 600,
+        JUMP_GRACE_MS: 250,          // Bu süre boyunca ısrar eden sıçrama kabul edilir
+    };
+
     /** Kalibrasyon tespit eşik değerleri */
     static CALIBRATION_THRESHOLDS = {
-        // Heading standart sapma eşikleri (dairesel, derece cinsinden)
+        // Heading standart sapma eşikleri (dairesel, derece cinsinden).
+        // Sadece cihaz durağanken ölçülür — kullanıcı dönerken sapma doğal olarak
+        // yükselir ve sensör kalitesi hakkında hiçbir şey söylemez.
         HEADING_STD_POOR: 15,        // > 15° std dev → POOR
         HEADING_STD_FAIR: 8,         // > 8° std dev → FAIR
-        HEADING_STD_GOOD: 4,         // < 4° std dev → GOOD
 
-        // Manyetik alan gücü (µT) — Dünya manyetik alanı: ~25-65 µT
-        MAG_FIELD_MIN: 20,           // Altı → manyetik kalkan / bozulma
-        MAG_FIELD_MAX: 70,           // Üstü → manyetik parazit
+        // Durağanlık eşiği: bunun üzerinde dönüş varsa örnek analize alınmaz
+        STILL_RATE_DPS: 8,
 
         // Analiz penceresi
-        SAMPLE_WINDOW: 40,           // Kaç sample üzerinden analiz
+        SAMPLE_WINDOW: 40,           // Kaç durağan sample üzerinden analiz
         CHECK_INTERVAL_MS: 2000,     // Kalibrasyon kontrol sıklığı (ms)
         WARMUP_SAMPLES: 10,          // İlk bu kadar sample'dan sonra kontrol başla
 
-        // Jump (sıçrama) oranı eşiği
+        // Sıçrama oranı eşiği (kayan pencere üzerinden)
+        JUMP_WINDOW: 120,            // Sıçrama oranının hesaplandığı örnek sayısı
         JUMP_RATE_POOR: 0.30,        // > %30 sıçrama oranı → POOR
         JUMP_RATE_FAIR: 0.15,        // > %15 sıçrama oranı → FAIR
+
+        // iOS webkitCompassAccuracy (±derece). Negatif = kalibre değil.
+        IOS_ACCURACY_POOR: 25,
+        IOS_ACCURACY_FAIR: 12,
     };
 
     static STYLES = `
@@ -243,6 +271,32 @@ class ARNavigationUI {
             stroke-dashoffset: 283;
         }
 
+        /* ===== HINT (düşük güven / durum uyarısı) ===== */
+        .arn-hint {
+            position: fixed;
+            bottom: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            max-width: 80%;
+            padding: 10px 18px;
+            border-radius: 20px;
+            background: rgba(0, 0, 0, 0.65);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            color: #fff;
+            font-size: 14px;
+            font-weight: 500;
+            text-align: center;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            z-index: 9015;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+        .arn-hint.arn-visible {
+            opacity: 1;
+        }
+
         /* ===== POPUP ===== */
         .arn-popup {
             position: fixed;
@@ -353,8 +407,10 @@ class ARNavigationUI {
 
     /**
      * @param {Object} options
-     * @param {number}  [options.targetAngle=0]        - Hedef pusula açısı (0-360)
+     * @param {number}  [options.targetAngle=0]        - Hedef açı, harita çerçevesinde (0-360)
      * @param {number}  [options.tolerance=20]          - Hizalanma toleransı (derece)
+     * @param {number}  [options.mapNorthOffset=0]      - Harita kuzeyinin gerçek kuzeye göre sapması (derece)
+     * @param {number}  [options.magneticDeclination=0] - Manyetik sapma, doğuya pozitif (derece)
      * @param {number}  [options.progressDuration=3]    - İlerleme süresi (saniye)
      * @param {boolean} [options.showPopup=true]        - Tamamlandığında popup göster
      * @param {string}  [options.popupMessage]          - Popup mesajı
@@ -376,13 +432,27 @@ class ARNavigationUI {
      * @param {Function} [options.onStop]               - AR durdurulduğunda
      * @param {Function} [options.onError]              - Hata oluştuğunda (string)
      * @param {boolean}  [options.calibrationCheck=true] - Kalibrasyon kalitesi izlensin mi
-     * @param {Function} [options.onCalibrationNeeded]   - Kalibrasyon gerektiğinde ({quality, stdDev, magField, jumpRate})
-     * @param {Function} [options.onCalibrationImproved] - Kalibrasyon iyileştiğinde ({quality})
+     * @param {Function} [options.onCalibrationNeeded]   - Kalibrasyon bozulduğunda ({quality, stdDev, jumpRate, iosAccuracy})
+     * @param {Function} [options.onCalibrationImproved] - Kalibrasyon iyileştiğinde ({quality, stdDev, jumpRate, iosAccuracy})
      */
     constructor(options = {}) {
         // Konfigürasyon
         this.targetAngle = options.targetAngle ?? 0;
         this.tolerance = options.tolerance ?? 20;
+
+        // ── Harita çerçevesi → pusula çerçevesi dönüşümü ──
+        // targetAngle harita çerçevesindedir (SVG'de yukarı = 0°). Kat planları
+        // gerçek kuzeye hizalı çizilmez, dolayısıyla bu offset mekan başına bir
+        // kez ölçülüp verilmelidir. Ölçmeden bırakılırsa oklar sabit bir hatayla
+        // çalışır. Kaynak SVG'lerde kuzey referansı bulunmadığı için otomatik
+        // türetilemez.
+        this.mapNorthOffset = options.mapNorthOffset ?? 0;
+
+        // Manyetik sapma (declination): gerçek kuzey ile manyetik kuzey arasındaki
+        // açı, doğuya doğru pozitif. Cihaz sensörleri manyetik kuzeyi referans alır
+        // (W3C: deviceorientationabsolute ve AbsoluteOrientationSensor). Türkiye
+        // için ~+6°. NOAA hesaplayıcısından mekan koordinatıyla alınabilir.
+        this.magneticDeclination = options.magneticDeclination ?? 0;
         this.progressDuration = options.progressDuration ?? 3;
         this.showPopup = options.showPopup !== false;
         this.popupMessage = options.popupMessage ?? 'Hedefe ulaştınız!';
@@ -416,18 +486,24 @@ class ARNavigationUI {
         this._completed = false;
         this._currentHeading = 0;
         this._currentBeta = 90;
+        this._currentConfidence = 1;
+        this._compassReady = false;
+        this._hintText = null;
 
         // DOM & listener referansları
         this._els = {};
         this._compassAbs = null;
         this._compassWk = null;
-        this._rafId = null;
+        this._progressTimer = null;
+        this._onProgressEnd = null;
         this._destroyed = false;
         this._compassActive = false;
         this._hasAbsoluteSource = false;
+        this._isIOSFamily = false;
         this._headingBuffer = [];
         this._lastRawHeading = null;
-        this._jumpRejectCount = 0;
+        this._lastSampleTime = 0;
+        this._jumpRejectMs = 0;
 
         // Pusula kaynak takibi
         // 'none' | 'absolute-event' | 'webkit-compass' | 'absolute-flag' | 'sensor-api'
@@ -435,19 +511,14 @@ class ARNavigationUI {
         this._compassTimeout = null;
         this._orientationSensor = null; // AbsoluteOrientationSensor (Generic Sensor API)
 
-        // Kalibrasyon kapısı (overlay kaldırıldı — sadece debug panel bilgi verir)
-        this._calibrationGate = 'passed';
-
         // Kalibrasyon durumu
         this._calibration = {
             quality: ARNavigationUI.CALIBRATION_QUALITY.UNKNOWN,
-            rawSamples: [],         // Son N ham heading değeri (std dev için)
+            stillSamples: [],       // Cihaz durağanken alınan ham heading değerleri
             totalSamples: 0,        // Toplam alınan sample sayısı
-            totalJumps: 0,          // Toplam reddedilen sıçrama sayısı
+            jumpFlags: [],          // Son N örnek için sıçrama bayrağı (kayan pencere)
             lastCheckTime: 0,       // Son kalibrasyon kontrolü zamanı
-            magField: null,         // Manyetik alan gücü (µT, Magnetometer varsa)
-            magSensor: null,        // Magnetometer API instance
-            prompted: false,        // Kalibrasyon ekranı gösterildi mi
+            iosAccuracy: null,      // webkitCompassAccuracy (±derece, iOS'a özel)
         };
 
         // Başlat
@@ -467,6 +538,20 @@ class ARNavigationUI {
 
     /** Mevcut pusula açısı */
     get currentHeading() { return this._currentHeading; }
+
+    /** Mevcut okumanın güvenilirliği (0-1); kamera ufka yaklaştıkça 1'e gider */
+    get currentConfidence() { return this._currentConfidence; }
+
+    /**
+     * Hedef açının cihaz pusulasıyla karşılaştırılabilir hali.
+     *
+     * targetAngle harita çerçevesindedir; cihaz ise manyetik kuzeyi ölçer.
+     * Zincir: harita açısı → (mapNorthOffset) → gerçek kuzey → (−declination)
+     * → manyetik kuzey.
+     */
+    get effectiveTargetAngle() {
+        return ((this.targetAngle + this.mapNorthOffset - this.magneticDeclination) % 360 + 360) % 360;
+    }
 
     /** Aktif pusula kaynağı ('absolute-event' | 'webkit-compass' | 'absolute-flag' | 'sensor-api' | 'fallback-rotation' | 'none') */
     get compassSource() { return this._compassSource; }
@@ -513,8 +598,7 @@ class ARNavigationUI {
         this._completed = false;
         this._aligned = false;
 
-        // Kalibrasyon kapısı artık yok — kalite bilgisi sadece debug panelde gösterilir
-        this._calibrationGate = 'passed';
+        this._setHint(null);
 
         // Root'u göster
         this._els.root.classList.add('arn-active');
@@ -538,7 +622,7 @@ class ARNavigationUI {
         if (this.onStart) this.onStart();
         this._updateDebugPanel({
             status: 'AR Çalışıyor…',
-            target: this.targetAngle.toFixed(0) + '°'
+            target: this.effectiveTargetAngle.toFixed(0) + '°'
         });
     }
 
@@ -557,6 +641,7 @@ class ARNavigationUI {
         this._hideAllArrows();
         this._resetProgress();
         this._hidePopup();
+        this._setHint(null);
         this._els.loading.classList.remove('arn-show');
 
         this._els.root.classList.remove('arn-active');
@@ -629,11 +714,12 @@ class ARNavigationUI {
                             stroke="#4CAF50" stroke-width="8" fill="none"/>
                 </svg>
             </div>
+            <div class="arn-hint"></div>
             <div class="arn-popup">
                 <div class="arn-popup-content">
                     <div class="arn-popup-icon">${this._getPopupIcon()}</div>
-                    <div class="arn-popup-message">${this.popupMessage}</div>
-                    <button class="arn-popup-btn">${this.popupButtonText}</button>
+                    <div class="arn-popup-message"></div>
+                    <button class="arn-popup-btn"></button>
                 </div>
             </div>
             <!-- Kalibrasyon bilgisi debug panel üzerinden izlenir -->
@@ -650,6 +736,7 @@ class ARNavigationUI {
                     <div class="arn-debug-row"><span class="arn-debug-label">Hedef Yön</span><span class="arn-debug-value arn-dbg-target">–</span></div>
                     <div class="arn-debug-row"><span class="arn-debug-label">Pusula</span><span class="arn-debug-value arn-dbg-heading">–</span></div>
                     <div class="arn-debug-row"><span class="arn-debug-label">Kaynak</span><span class="arn-debug-value arn-dbg-source">–</span></div>
+                    <div class="arn-debug-row"><span class="arn-debug-label">Güven</span><span class="arn-debug-value arn-dbg-conf">–</span></div>
                     <div class="arn-debug-row"><span class="arn-debug-label">Kalibrasyon</span><span class="arn-debug-value arn-dbg-calib">–</span></div>
                 </div>
             `;
@@ -662,6 +749,7 @@ class ARNavigationUI {
             this._els.dbgTarget  = dbg.querySelector('.arn-dbg-target');
             this._els.dbgHeading = dbg.querySelector('.arn-dbg-heading');
             this._els.dbgSource  = dbg.querySelector('.arn-dbg-source');
+            this._els.dbgConf    = dbg.querySelector('.arn-dbg-conf');
             this._els.dbgCalib   = dbg.querySelector('.arn-dbg-calib');
         }
 
@@ -679,6 +767,13 @@ class ARNavigationUI {
         this._els.popup = root.querySelector('.arn-popup');
         this._els.popupMessage = root.querySelector('.arn-popup-message');
         this._els.popupBtn = root.querySelector('.arn-popup-btn');
+        this._els.hint = root.querySelector('.arn-hint');
+
+        // Kullanıcıdan/sunucudan gelebilecek metinler innerHTML'e değil
+        // textContent'e yazılır
+        this._els.popupMessage.textContent = this.popupMessage;
+        this._els.popupBtn.textContent = this.popupButtonText;
+
         // İlerleme süresi ayarla
         this._els.progressBar.style.transition =
             `stroke-dashoffset ${this.progressDuration}s linear`;
@@ -692,11 +787,26 @@ class ARNavigationUI {
     }
 
     /**
+     * HTML attribute değerini kaçırır.
+     * Görsel yolları dışarıdan (konfigürasyon, sunucu) geldiği için
+     * innerHTML'e ham gömülmemeli.
+     */
+    static _escapeAttr(value) {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
+
+    /**
      * Ok içeriğini döndürür: özel resim varsa <img>, yoksa inline SVG
      */
     _getArrowContent(type) {
         if (this.arrowImages && this.arrowImages[type]) {
-            return `<img src="${this.arrowImages[type]}" class="arn-arrow-icon" alt="${type}">`;
+            const src = ARNavigationUI._escapeAttr(this.arrowImages[type]);
+            return `<img src="${src}" class="arn-arrow-icon" alt="${ARNavigationUI._escapeAttr(type)}">`;
         }
         return ARNavigationUI.ARROW_SVGS[type] || '';
     }
@@ -706,7 +816,8 @@ class ARNavigationUI {
      */
     _getPopupIcon() {
         if (this.popupImage) {
-            return `<img src="${this.popupImage}" class="arn-popup-img" alt="completed">`;
+            const src = ARNavigationUI._escapeAttr(this.popupImage);
+            return `<img src="${src}" class="arn-popup-img" alt="completed">`;
         }
         return '✅';
     }
@@ -716,7 +827,8 @@ class ARNavigationUI {
      */
     _getLoadingContent() {
         if (this.loadingImage) {
-            return `<img src="${this.loadingImage}" class="arn-loading-img" alt="loading">`;
+            const src = ARNavigationUI._escapeAttr(this.loadingImage);
+            return `<img src="${src}" class="arn-loading-img" alt="loading">`;
         }
         return `<div class="arn-loading-spinner"></div>`;
     }
@@ -765,38 +877,42 @@ class ARNavigationUI {
     // ================================================================
 
     /**
-     * W3C rotation matrix yöntemiyle absolute pusula açısı hesaplar.
-     * Telefon hangi açıda tutulursa tutulsun (dikey, yatay, eğik)
-     * daima doğru kuzeyi referans alan heading döndürür.
+     * W3C rotation matrix yöntemiyle kameranın baktığı yönün pusula açısını hesaplar.
+     *
+     * Cihazın -Z ekseni (arka kamera doğrultusu) Dünya çerçevesine taşınır ve
+     * yatay düzleme izdüşürülür. Telefon hangi açıda tutulursa tutulsun —
+     * portre, yatay, eğik — kameranın gerçekten baktığı yön elde edilir.
+     * Ekran yönünden (portre/yatay) tamamen bağımsızdır; doğrulaması
+     * tools/compass-math-check.js TEST 1 ve TEST 2'de.
+     *
+     * Dönen `confidence`, izdüşüm vektörünün büyüklüğüdür (0-1):
+     * kamera ufka paralelken 1, tavana veya zemine bakarken 0'a iner.
+     * Sıfıra yaklaştıkça heading tanımsızlaşır — sensör gürültüsü heading'e
+     * 1/confidence oranında büyüyerek yansır. Euler açılarındaki klasik
+     * gimbal lock (beta ≈ ±90) bu yöntemde sorun değildir; orada confidence
+     * 1'e çıkar, yani okuma en güvenilir haldedir.
      *
      * @param {number} alpha - DeviceOrientation alpha (0-360)
      * @param {number} beta  - DeviceOrientation beta (-180..180)
      * @param {number} gamma - DeviceOrientation gamma (-90..90)
-     * @returns {number} 0-360 derece pusula açısı (0=Kuzey, saat yönünde)
+     * @returns {{heading: number, confidence: number}}
      */
     static _computeHeadingFromRotationMatrix(alpha, beta, gamma) {
         const degToRad = Math.PI / 180;
-        const alphaRad = alpha * degToRad;
-        const betaRad  = beta  * degToRad;
-        const gammaRad = gamma * degToRad;
+        const cA = Math.cos(alpha * degToRad);
+        const sA = Math.sin(alpha * degToRad);
+        const sB = Math.sin(beta * degToRad);
+        const cG = Math.cos(gamma * degToRad);
+        const sG = Math.sin(gamma * degToRad);
 
-        // Rotation matrix bileşenleri
-        const cA = Math.cos(alphaRad);
-        const sA = Math.sin(alphaRad);
-        const cB = Math.cos(betaRad);
-        const sB = Math.sin(betaRad);
-        const cG = Math.cos(gammaRad);
-        const sG = Math.sin(gammaRad);
+        // Kamera doğrultusunun (-Z) Dünya çerçevesindeki doğu ve kuzey bileşenleri
+        const east  = -cA * sG - sA * sB * cG;
+        const north = -sA * sG + cA * sB * cG;
 
-        // Kuzey vektörünün cihaz ekranına projeksiyonu
-        const rA = -cA * sG - sA * sB * cG;
-        const rB = -sA * sG + cA * sB * cG;
+        let heading = Math.atan2(east, north) * (180 / Math.PI);
+        if (heading < 0) heading += 360;
 
-        // atan2 ile pusula açısı (radyan → derece, 0-360 aralığında)
-        let compassHeading = Math.atan2(rA, rB) * (180 / Math.PI);
-        if (compassHeading < 0) compassHeading += 360;
-
-        return compassHeading;
+        return { heading, confidence: Math.hypot(east, north) };
     }
 
     _startCompass() {
@@ -813,23 +929,31 @@ class ARNavigationUI {
         this._compassSource = 'none';
         this._headingBuffer = [];  // Smoothing için son heading değerleri
 
+        // iOS ailesi tespiti. iOS'ta alpha MUTLAK DEĞİLDİR: Apple'ın kendi
+        // dokümantasyonuna göre "cihazın ilk okuma anındaki yönünden ölçülen
+        // keyfi bir offset". Bu yüzden iOS'ta alpha tabanlı fallback'e asla
+        // düşülmemeli — kullanıcıya sessizce rastgele bir yön gösterirdi.
+        this._isIOSFamily =
+            typeof DeviceOrientationEvent.requestPermission === 'function' ||
+            (DeviceOrientationEvent.prototype &&
+             'webkitCompassHeading' in DeviceOrientationEvent.prototype);
+
         // ══════════════════════════════════════════════════════
         //  KAYNAK 1: deviceorientationabsolute (Chrome Android)
-        //  En güvenilir kaynak: tarayıcı absolute garanti eder.
-        //  e.absolute === false ise event göreceli → yoksay.
+        //  Tarayıcı absolute garanti eder. e.absolute === false ise
+        //  event göreceli → yoksay.
         // ══════════════════════════════════════════════════════
         this._compassAbs = (e) => {
+            // AbsoluteOrientationSensor devraldıysa bu kaynağı kullanma.
+            // İkisi birden beslerse aynı buffer iki farklı hesaptan dolar,
+            // örnekleme hızı ikiye katlanır ve heading salınır.
+            if (this._compassSource === 'sensor-api') return;
             // Bazı tarayıcılar bu eventi göreceli değerlerle ateşler
             if (e.absolute === false) return;
             if (e.alpha == null || e.beta == null || e.gamma == null) return;
 
             this._hasAbsoluteSource = true;
-            this._compassSource = 'absolute-event';
-
-            const heading = ARNavigationUI._computeHeadingFromRotationMatrix(
-                e.alpha, e.beta, e.gamma
-            );
-            this._handleCompass(heading, e.beta);
+            this._ingestOrientation(e.alpha, e.beta, e.gamma, 'absolute-event');
         };
 
         // ══════════════════════════════════════════════════════
@@ -840,38 +964,38 @@ class ARNavigationUI {
             // Absolute kaynak zaten aktifse → çakışma önle
             if (this._hasAbsoluteSource) return;
 
-            // ── iOS: webkitCompassHeading (tilt-kompanzasyonlu, absolute) ──
+            // ── iOS: webkitCompassHeading ──
+            // Bu değer kamera yönü DEĞİL, alpha ile aynı ailedendir: dünya
+            // dikey ekseni etrafındaki azimut (alpha'nın tersi yönde artar).
+            // Doğrudan heading olarak kullanılırsa portrede doğru, yatay modda
+            // ~90° yanlış olur. Bu yüzden mutlak alpha'ya çevirip Android ile
+            // aynı rotasyon matrisinden geçiriyoruz.
             if (e.webkitCompassHeading != null && !isNaN(e.webkitCompassHeading)) {
                 this._compassSource = 'webkit-compass';
-                this._handleCompass(e.webkitCompassHeading, e.beta || 90);
+                this._recordIOSAccuracy(e.webkitCompassAccuracy);
+                const alpha = (360 - e.webkitCompassHeading) % 360;
+                this._ingestOrientation(alpha, e.beta ?? 90, e.gamma ?? 0, 'webkit-compass');
                 return;
             }
 
             // ── Firefox / bazı Android tarayıcılar: e.absolute === true ──
             if (e.absolute === true && e.alpha != null && e.beta != null && e.gamma != null) {
-                this._compassSource = 'absolute-flag';
-                const heading = ARNavigationUI._computeHeadingFromRotationMatrix(
-                    e.alpha, e.beta, e.gamma
-                );
-                this._handleCompass(heading, e.beta);
+                this._ingestOrientation(e.alpha, e.beta, e.gamma, 'absolute-flag');
                 return;
             }
 
             // ── Son çare: 5s timeout sonrası göreceli rotasyon matrisi ──
-            // deviceorientationabsolute hiç ateşlenmediyse ve başka kaynak yoksa,
-            // deviceorientation alpha değerini rotation matrix ile kullan.
-            // Bu değer bazı tarayıcılarda absolute olmayabilir — uyarı gösterilir.
-            if (this._compassFallbackEnabled && e.alpha != null && e.beta != null && e.gamma != null) {
+            // Sadece iOS DIŞINDA. Android'de alpha genelde manyetik kuzeye
+            // referanslıdır; iOS'ta keyfidir ve bu dal açılırsa ok yanlış yönü
+            // gösterirken kullanıcı doğru sanır.
+            if (this._compassFallbackEnabled && !this._isIOSFamily &&
+                e.alpha != null && e.beta != null && e.gamma != null) {
                 if (this._compassSource === 'none') {
-                    this._compassSource = 'fallback-rotation';
                     console.warn('ARNavigationUI: Absolute pusula bulunamadı, ' +
                         'deviceorientation rotation matrix fallback kullanılıyor — ' +
                         'yön doğruluğu garanti edilemez');
                 }
-                const heading = ARNavigationUI._computeHeadingFromRotationMatrix(
-                    e.alpha, e.beta, e.gamma
-                );
-                this._handleCompass(heading, e.beta);
+                this._ingestOrientation(e.alpha, e.beta, e.gamma, 'fallback-rotation');
             }
         };
 
@@ -891,16 +1015,25 @@ class ARNavigationUI {
             // ── Timeout: 5s içinde absolute kaynak bulunamazsa fallback aç ──
             this._compassFallbackEnabled = false;
             this._compassTimeout = setTimeout(() => {
-                if (this._compassSource === 'none') {
-                    console.warn('ARNavigationUI: 5s içinde absolute pusula verisi alınamadı');
-                    this._compassFallbackEnabled = true;
-                    // Hâlâ veri gelmezse hata yayınla
-                    setTimeout(() => {
-                        if (this._compassSource === 'none') {
-                            this._emitError('Pusula verisi alınamıyor — cihaz sensörleri kontrol edin');
-                        }
-                    }, 3000);
+                if (this._compassSource !== 'none') return;
+
+                if (this._isIOSFamily) {
+                    // iOS'ta alpha keyfi olduğu için fallback yok. Pusula yoksa
+                    // yön üretmek yerine dürüstçe hata veriyoruz.
+                    this._emitError('Pusula verisi alınamıyor — Ayarlar > Gizlilik > ' +
+                        'Konum Servisleri > Sistem Servisleri altından Pusula ' +
+                        'Ayarlama seçeneğini açın');
+                    return;
                 }
+
+                console.warn('ARNavigationUI: 5s içinde absolute pusula verisi alınamadı');
+                this._compassFallbackEnabled = true;
+                // Hâlâ veri gelmezse hata yayınla
+                setTimeout(() => {
+                    if (this._compassSource === 'none') {
+                        this._emitError('Pusula verisi alınamıyor — cihaz sensörleri kontrol edin');
+                    }
+                }, 3000);
             }, 5000);
         };
 
@@ -956,10 +1089,15 @@ class ARNavigationUI {
                 const R21 = 2 * (qy * qz + qw * qx);
                 const beta = Math.atan2(R21, R22) * (180 / Math.PI);
 
-                // Sensor API'yi birincil kaynak olarak işaretle
+                // ── Birincil kaynak olarak devral ──
+                // deviceorientationabsolute dinleyicisi bu noktadan sonra
+                // gereksiz; kaldırılmazsa iki kaynak aynı buffer'ı besler.
+                if (this._compassSource !== 'sensor-api' && this._compassAbs) {
+                    window.removeEventListener('deviceorientationabsolute', this._compassAbs, true);
+                }
                 this._hasAbsoluteSource = true;
                 this._compassSource = 'sensor-api';
-                this._handleCompass(heading, beta);
+                this._handleCompass(heading, beta, Math.hypot(projEast, projNorth));
             });
 
             sensor.addEventListener('error', (e) => {
@@ -985,10 +1123,6 @@ class ARNavigationUI {
             window.removeEventListener('deviceorientation', this._compassWk, true);
             this._compassWk = null;
         }
-        if (this._rafId) {
-            cancelAnimationFrame(this._rafId);
-            this._rafId = null;
-        }
         if (this._compassTimeout) {
             clearTimeout(this._compassTimeout);
             this._compassTimeout = null;
@@ -1001,104 +1135,136 @@ class ARNavigationUI {
         this._compassSource = 'none';
         this._headingBuffer = [];
         this._lastRawHeading = null;
-        this._jumpRejectCount = 0;
+        this._lastSampleTime = 0;
+        this._jumpRejectMs = 0;
 
         // Kalibrasyon izlemeyi durdur
         this._stopCalibrationMonitor();
     }
 
     /**
-     * Gimbal Lock korumalı heading smoothing.
-     *
-     * Gimbal Lock: Euler açılarında beta ≈ ±90° olduğunda alpha ve gamma
-     * eksenleri çakışır, sensör verileri anlık 180° sıçrar. Bu metod:
-     *
-     * 1. Jump Rejection  — Gimbal bölgesinde ani büyük sıçramaları reddeder,
-     *    gerçek yön değişikliğini (ardışık tutarlı okuma) ise kabul eder.
-     * 2. Adaptive Buffer — Gimbal bölgesinde smoothing buffer'ını büyütür,
-     *    normal bölgede küçük tutar (tepki hızı için).
-     * 3. Circular Mean   — 0°/360° geçişinde doğru ortalama alır.
-     *
-     * @param {number} rawHeading - Ham heading değeri (0-360)
-     * @param {number} beta       - Cihaz beta açısı (eğim)
-     * @returns {number} Kararlı heading (0-360)
+     * Ham yönelim verisini heading'e çevirip işleme hattına verir.
+     * Tüm kaynaklar (Android absolute event, iOS webkitCompass, fallback)
+     * buradan geçer — böylece platformlar arasında tek bir matematik kullanılır.
      */
-    _smoothHeading(rawHeading, beta) {
-        // ── Gimbal Lock bölgesi tespiti ──
-        // beta=90° civarı (±GIMBAL_LOCK_ZONE) tehlike bölgesi
-        const GIMBAL_LOCK_ZONE = 15;     // derece (90° ± bu değer)
-        const BUFFER_NORMAL    = 5;      // normal smoothing penceresi
-        const BUFFER_GIMBAL    = 12;     // gimbal bölgesinde daha ağır smoothing
-        const MAX_JUMP_NORMAL  = 90;     // normal bölgede izin verilen max sıçrama
-        const MAX_JUMP_GIMBAL  = 30;     // gimbal bölgesinde çok daha katı
-        const REJECT_THRESHOLD_NORMAL = 3;  // kaç ardışık reject sonrası kabul et
-        const REJECT_THRESHOLD_GIMBAL = 10; // gimbal bölgesinde daha sabırlı
+    _ingestOrientation(alpha, beta, gamma, source) {
+        const { heading, confidence } =
+            ARNavigationUI._computeHeadingFromRotationMatrix(alpha, beta, gamma);
+        this._compassSource = source;
+        this._handleCompass(heading, beta, confidence);
+    }
 
-        const betaFromVertical = Math.abs((beta || 0) - 90);
-        const inGimbalZone = betaFromVertical < GIMBAL_LOCK_ZONE;
+    /**
+     * Heading smoothing — örnekleme hızından bağımsız.
+     *
+     * 1. Jump Rejection — Sıçrama eşiği sabit derece değil, açısal hız limitidir.
+     *    Böylece 60Hz ile 15Hz cihazlarda aynı fiziksel davranış elde edilir.
+     *    Sıçrama JUMP_GRACE_MS boyunca ısrar ederse gerçek hareket kabul edilir.
+     * 2. Zaman Pencereli Buffer — Sabit örnek sayısı yerine SMOOTHING_MS'lik
+     *    pencere. Yavaş ateşleyen cihazlarda gereksiz gecikme oluşmaz.
+     * 3. Güven Ağırlıklı Dairesel Ortalama — Her örnek confidence² ile
+     *    ağırlıklandırılır. Bu ters-varyans ağırlıklandırmasıdır: heading
+     *    gürültüsü 1/confidence ile büyüdüğü için varyans 1/confidence²'dir.
+     *
+     * @param {number} rawHeading - Ham heading (0-360)
+     * @param {number} confidence - Yatay izdüşüm büyüklüğü (0-1)
+     * @param {number} dtMs       - Bir önceki örnekten geçen süre
+     * @returns {number|null} Kararlı heading, veya sıçrama reddedildiyse null
+     */
+    _smoothHeading(rawHeading, confidence, dtMs) {
+        const H = ARNavigationUI.HEADING;
+        const now = Date.now();
 
-        const maxJump = inGimbalZone ? MAX_JUMP_GIMBAL : MAX_JUMP_NORMAL;
-        const bufferSize = inGimbalZone ? BUFFER_GIMBAL : BUFFER_NORMAL;
-        const rejectThreshold = inGimbalZone
-            ? REJECT_THRESHOLD_GIMBAL
-            : REJECT_THRESHOLD_NORMAL;
-
-        // ── Jump Rejection ──
-        // Önceki ham heading'e göre açısal fark hesapla
-        if (this._lastRawHeading !== null) {
+        // ── Jump Rejection (açısal hız tabanlı) ──
+        if (this._lastRawHeading !== null && dtMs > 0) {
             const diff = Math.abs(
                 ((rawHeading - this._lastRawHeading + 180) % 360 + 360) % 360 - 180
             );
+            // Çok kısa dt'lerde alt sınır koy, aksi halde eşik sıfıra yaklaşır
+            const maxJump = Math.max(15, H.MAX_TURN_RATE_DPS * (dtMs / 1000));
 
             if (diff > maxJump) {
-                this._jumpRejectCount++;
-                this._recordCalibrationJump(); // Kalibrasyon istatistiği
-                // Belirli sayıda ardışık reject → gerçek yön değişikliği, kabul et
-                if (this._jumpRejectCount < rejectThreshold) {
-                    // Sıçramayı reddet, mevcut kararlı heading'i döndür
-                    return this._currentHeading || rawHeading;
+                this._jumpRejectMs += dtMs;
+                this._recordCalibrationJump();
+                if (this._jumpRejectMs < H.JUMP_GRACE_MS) {
+                    return null; // sıçramayı reddet, mevcut heading korunur
                 }
-                // Eşik aşıldı: buffer'ı temizle, yeni yönü kabul et
+                // Sıçrama ısrar etti → gerçek hareket, buffer'ı sıfırla
                 this._headingBuffer = [];
+                this._jumpRejectMs = 0;
             } else {
-                this._jumpRejectCount = 0;
+                this._jumpRejectMs = 0;
             }
         }
 
         this._lastRawHeading = rawHeading;
 
-        // ── Adaptive Buffer ──
-        this._headingBuffer.push(rawHeading);
-        while (this._headingBuffer.length > bufferSize) {
+        // ── Zaman pencereli buffer ──
+        const weight = confidence * confidence;
+        this._headingBuffer.push({ heading: rawHeading, weight, time: now });
+
+        const cutoff = now - H.SMOOTHING_MS;
+        while (this._headingBuffer.length > 1 &&
+               (this._headingBuffer[0].time < cutoff ||
+                this._headingBuffer.length > H.MAX_BUFFER)) {
             this._headingBuffer.shift();
         }
 
-        // ── Circular Mean (sin/cos yöntemi) ──
-        // 0°/360° geçişinde yanlış ortalama almaz
+        // ── Güven ağırlıklı dairesel ortalama ──
         const degToRad = Math.PI / 180;
         let sinSum = 0, cosSum = 0;
-        for (const h of this._headingBuffer) {
-            sinSum += Math.sin(h * degToRad);
-            cosSum += Math.cos(h * degToRad);
+        for (const s of this._headingBuffer) {
+            sinSum += Math.sin(s.heading * degToRad) * s.weight;
+            cosSum += Math.cos(s.heading * degToRad) * s.weight;
         }
+        if (sinSum === 0 && cosSum === 0) return null;
+
         let avg = Math.atan2(sinSum, cosSum) * (180 / Math.PI);
         if (avg < 0) avg += 360;
-
         return avg;
     }
 
-    _handleCompass(rawHeading, beta) {
-        // ── Kalibrasyon sample kaydı (filtreleme öncesi ham veri) ──
-        // _recordCalibrationSample → _evaluateCalibrationQuality zinciri
-        // kalibrasyon kalitesini takip eder, debug panelde gösterir.
-        this._recordCalibrationSample(rawHeading);
+    /**
+     * @param {number} rawHeading - Ham heading (0-360)
+     * @param {number} beta       - Cihaz eğimi
+     * @param {number} confidence - Okumanın güvenilirliği (0-1)
+     */
+    _handleCompass(rawHeading, beta, confidence = 1) {
+        const now = Date.now();
+        const dtMs = this._lastSampleTime ? now - this._lastSampleTime : 0;
+        this._lastSampleTime = now;
+
+        this._currentBeta = beta;
+        this._currentConfidence = confidence;
+
+        // ── Güven eşiğinin altında heading tanımsız ──
+        // Kamera tavana veya zemine bakıyor; yatay izdüşüm sıfıra yaklaştığı için
+        // en ufak sensör gürültüsü heading'i 180°'ye kadar savurur. Bu okumaları
+        // işlemek yerine son kararlı heading'i koruyup kullanıcıyı uyarıyoruz.
+        if (confidence < ARNavigationUI.HEADING.MIN_CONFIDENCE) {
+            this._lastRawHeading = null; // süreklilik koptu, sıçrama sayacını sıfırla
+            if (this._running && !this._completed) {
+                this._setHint('Telefonu dikleştirin');
+                this._updateDebugPanel({ conf: 'düşük (' + confidence.toFixed(2) + ')' });
+            }
+            return;
+        }
+
+        // Dönüş hızı — kalibrasyon analizinin sadece durağan anları kullanması için
+        let turnRate = 0;
+        if (this._lastRawHeading !== null && dtMs > 0) {
+            const d = Math.abs(
+                ((rawHeading - this._lastRawHeading + 180) % 360 + 360) % 360 - 180
+            );
+            turnRate = d / (dtMs / 1000);
+        }
+        this._recordCalibrationSample(rawHeading, turnRate);
 
         // ── HER ZAMAN heading'i güncelle (stop durumunda bile) ──
         // Sensör referans çerçevesi canlı tutulur, tekrar start'ta
         // heading zaten güncel ve kararlıdır.
-        const heading = this._smoothHeading(rawHeading, beta);
-        this._currentHeading = heading;
-        this._currentBeta = beta;
+        const smoothed = this._smoothHeading(rawHeading, confidence, dtMs);
+        if (smoothed !== null) this._currentHeading = smoothed;
 
         // ── Navigasyon aktif değilse sadece heading takibi yap ──
         if (!this._running || this._completed) return;
@@ -1109,24 +1275,30 @@ class ARNavigationUI {
             this._els.loading.classList.remove('arn-show');
         }
 
-        // Compass callback — kapı durumundan bağımsız her zaman çağrılır
-        // (dış kodun heading'i izleyebilmesi için)
+        this._setHint(
+            confidence < ARNavigationUI.HEADING.LOW_CONFIDENCE
+                ? 'Telefonu biraz dikleştirin'
+                : null
+        );
+
+        // Compass callback — dış kodun heading'i izleyebilmesi için
         if (this.onCompassUpdate) {
             this.onCompassUpdate({
-                heading: heading,
+                heading: this._currentHeading,
                 beta: beta,
+                confidence: confidence,
                 targetAngle: this.targetAngle,
+                effectiveTargetAngle: this.effectiveTargetAngle,
                 source: this._compassSource
             });
         }
 
-        // Debug panel güncelle
         this._updateDebugPanel({
-            heading: heading.toFixed(0) + '°',
-            source: ARNavigationUI._SOURCE_LABELS[this._compassSource] || this._compassSource
+            heading: this._currentHeading.toFixed(0) + '°',
+            source: ARNavigationUI._SOURCE_LABELS[this._compassSource] || this._compassSource,
+            conf: confidence.toFixed(2)
         });
 
-        // Okları güncelle
         this._updateArrows();
     }
 
@@ -1135,7 +1307,7 @@ class ARNavigationUI {
     // ================================================================
 
     _updateArrows() {
-        const target = this.targetAngle;
+        const target = this.effectiveTargetAngle;
         const current = this._currentHeading;
         const beta = this._currentBeta;
 
@@ -1189,46 +1361,72 @@ class ARNavigationUI {
     }
 
     _startProgress() {
+        const bar = this._els.progressBar;
+        this._clearProgressWatch();
+
         this._els.progress.classList.add('arn-grow');
-        this._els.progressBar.style.strokeDashoffset = '0';
-        this._monitorProgress();
+        bar.style.transition = `stroke-dashoffset ${this.progressDuration}s linear`;
+        bar.style.strokeDashoffset = '0';
+
+        // Eskiden her karede getComputedStyle okunuyordu; bu her karede zorunlu
+        // layout tetikliyordu. transitionend aynı bilgiyi bedavaya veriyor.
+        this._onProgressEnd = (e) => {
+            if (e && e.propertyName && e.propertyName !== 'stroke-dashoffset') return;
+            this._completeProgress();
+        };
+        bar.addEventListener('transitionend', this._onProgressEnd);
+
+        // Emniyet payı: transitionend bazı tarayıcılarda gizlenmiş elemanlarda
+        // ateşlenmeyebilir.
+        this._progressTimer = setTimeout(
+            () => this._completeProgress(),
+            this.progressDuration * 1000 + 1000
+        );
     }
 
     _resetProgress() {
+        const bar = this._els.progressBar;
+        this._clearProgressWatch();
         this._els.progress.classList.remove('arn-grow');
-        this._els.progressBar.style.strokeDashoffset = '283';
-        if (this._rafId) {
-            cancelAnimationFrame(this._rafId);
-            this._rafId = null;
-        }
+
+        // Geri sarma anlık olmalı — aynı transition ile dönerse progressDuration
+        // kadar sürer ve kullanıcı yeniden hizalandığında yarım dolu başlar.
+        bar.style.transition = 'none';
+        bar.style.strokeDashoffset = '283';
+        if (typeof bar.getBoundingClientRect === 'function') bar.getBoundingClientRect();
+        bar.style.transition = `stroke-dashoffset ${this.progressDuration}s linear`;
     }
 
-    _monitorProgress() {
+    _clearProgressWatch() {
+        if (this._progressTimer) {
+            clearTimeout(this._progressTimer);
+            this._progressTimer = null;
+        }
+        if (this._onProgressEnd && this._els.progressBar) {
+            this._els.progressBar.removeEventListener('transitionend', this._onProgressEnd);
+        }
+        this._onProgressEnd = null;
+    }
+
+    _completeProgress() {
         if (!this._aligned || this._completed || !this._running) return;
+        this._clearProgressWatch();
 
-        const offset = parseFloat(
-            getComputedStyle(this._els.progressBar).strokeDashoffset
-        );
+        // ❗ Pusula DURDURULMAZ — _completed = true heading takibini durdurmaz,
+        //    sadece ok güncellemesini durdurur (_handleCompass içindeki kontrol).
+        //    Böylece popup açıkken kullanıcı döndüğünde heading güncel kalır
+        //    ve tekrar start() çağrıldığında doğru yönü gösterir.
+        this._completed = true;
+        this._hideAllArrows();
+        this._setHint(null);
 
-        if (offset === 0) {
-            // Tamamlandı!
-            // ❗ Pusula DURDURULMAZ — _completed = true heading takibini durdurmaz,
-            //    sadece ok güncellemesini durdurur (_handleCompass içindeki kontrol).
-            //    Böylece popup açıkken kullanıcı döndüğünde heading güncel kalır
-            //    ve tekrar start() çağrıldığında doğru yönü gösterir.
-            this._completed = true;
-            this._hideAllArrows();
+        if (this.onCompleted) this.onCompleted();
+        this._updateDebugPanel({ status: 'Hedefe ulaşıldı ✅' });
 
-            if (this.onCompleted) this.onCompleted();
-            this._updateDebugPanel({ status: 'Hedefe ulaşıldı ✅' });
-
-            if (this.showPopup) {
-                this._showPopup();
-            } else {
-                this.stop();
-            }
+        if (this.showPopup) {
+            this._showPopup();
         } else {
-            this._rafId = requestAnimationFrame(() => this._monitorProgress());
+            this.stop();
         }
     }
 
@@ -1271,8 +1469,30 @@ class ARNavigationUI {
         return current >= lower && current <= upper;
     }
 
+    /**
+     * Ekranın altındaki ipucu balonunu günceller.
+     * @param {string|null} text - null verilirse balon gizlenir
+     */
+    _setHint(text) {
+        if (this._hintText === text) return; // gereksiz DOM dokunuşunu önle
+        this._hintText = text;
+        if (!this._els.hint) return;
+        if (text) {
+            this._els.hint.textContent = text;
+            this._els.hint.classList.add('arn-visible');
+        } else {
+            this._els.hint.classList.remove('arn-visible');
+        }
+    }
+
     _emitError(message) {
         console.error('ARNavigationUI:', message);
+
+        // Yükleniyor ekranı pusula verisini bekliyordu; veri hiç gelmeyecekse
+        // kullanıcı sonsuza kadar "Pusula başlatılıyor..." ekranında kalırdı.
+        if (this._els.loading) this._els.loading.classList.remove('arn-show');
+        this._setHint(message);
+
         if (this.onError) this.onError(message);
         this._updateDebugPanel({ status: '⚠ ' + message });
     }
@@ -1304,6 +1524,7 @@ class ARNavigationUI {
         if (fields.target  !== undefined && this._els.dbgTarget)  this._els.dbgTarget.textContent  = fields.target;
         if (fields.heading !== undefined && this._els.dbgHeading) this._els.dbgHeading.textContent = fields.heading;
         if (fields.source  !== undefined && this._els.dbgSource)  this._els.dbgSource.textContent  = fields.source;
+        if (fields.conf    !== undefined && this._els.dbgConf)    this._els.dbgConf.textContent    = fields.conf;
         if (fields.calib   !== undefined && this._els.dbgCalib)   this._els.dbgCalib.textContent   = fields.calib;
     }
 
@@ -1329,19 +1550,15 @@ class ARNavigationUI {
      */
     getCalibrationReport() {
         const cal = this._calibration;
-        const stdDev = this._computeCircularStdDev(cal.rawSamples);
-        const jumpRate = cal.totalSamples > 0
-            ? cal.totalJumps / cal.totalSamples
-            : 0;
-
         return {
             quality: cal.quality,
-            headingStdDev: Math.round(stdDev * 100) / 100,
-            jumpRate: Math.round(jumpRate * 1000) / 1000,
-            magneticField: cal.magField,
+            headingStdDev: Math.round(this._computeCircularStdDev(cal.stillSamples) * 100) / 100,
+            jumpRate: Math.round(this._computeJumpRate() * 1000) / 1000,
+            iosAccuracy: cal.iosAccuracy,
+            stillSamples: cal.stillSamples.length,
             totalSamples: cal.totalSamples,
-            totalJumps: cal.totalJumps,
-            hasMagnetometer: cal.magSensor !== null,
+            confidence: this._currentConfidence,
+            source: this._compassSource,
             hasAbsoluteSource: this._hasAbsoluteSource
         };
     }
@@ -1364,16 +1581,13 @@ class ARNavigationUI {
     _startCalibrationMonitor() {
         if (!this.calibrationCheck) return;
 
-        // Kalibrasyon state'ini sıfırla
-        this._calibration.rawSamples = [];
-        this._calibration.totalSamples = 0;
-        this._calibration.totalJumps = 0;
-        this._calibration.lastCheckTime = 0;
-        this._calibration.quality = ARNavigationUI.CALIBRATION_QUALITY.UNKNOWN;
-        this._calibration.prompted = false;
-
-        // Magnetometer API'yi dene (manyetik alan gücü kontrolü)
-        this._startMagnetometer();
+        const cal = this._calibration;
+        cal.stillSamples = [];
+        cal.totalSamples = 0;
+        cal.jumpFlags = [];
+        cal.lastCheckTime = 0;
+        cal.iosAccuracy = null;
+        cal.quality = ARNavigationUI.CALIBRATION_QUALITY.UNKNOWN;
     }
 
     /**
@@ -1381,53 +1595,23 @@ class ARNavigationUI {
      * _stopCompass() içinden çağrılır.
      */
     _stopCalibrationMonitor() {
-        this._stopMagnetometer();
+        this._calibration.stillSamples = [];
+        this._calibration.jumpFlags = [];
     }
-
-    // ────────────────────────────────────────
-    //  PRIVATE: Magnetometer API (Generic Sensor)
-    // ────────────────────────────────────────
 
     /**
-     * Magnetometer Generic Sensor API'yi başlatır (varsa).
-     * Ham manyetik alan gücünü (µT) okur.
-     * Normal Dünya manyetik alanı: ~25-65 µT
-     * Bu aralık dışı = manyetik parazit veya bozuk kalibrasyon.
+     * iOS'un bildirdiği pusula doğruluğunu kaydeder.
+     *
+     * webkitCompassAccuracy sensörün kendi hata payını ±derece cinsinden verir;
+     * negatif değer "kalibre değil" demektir. Bu, heading dağılımından kalite
+     * tahmin etmeye çalışmaktan çok daha güvenilirdir. Android'de standart bir
+     * karşılığı yok, orada istatistiksel sezgisele mecburuz.
+     *
+     * @param {number|null|undefined} accuracy
      */
-    _startMagnetometer() {
-        if (!('Magnetometer' in window)) {
-            // API desteklenmiyor — sorun değil, sadece heading analizi ile devam
-            return;
-        }
-
-        try {
-            const sensor = new Magnetometer({ frequency: 10 });
-
-            sensor.addEventListener('reading', () => {
-                const { x, y, z } = sensor;
-                // Manyetik alan gücü (µT) = vektör büyüklüğü
-                this._calibration.magField = Math.sqrt(x * x + y * y + z * z);
-            });
-
-            sensor.addEventListener('error', (e) => {
-                console.warn('ARNavigationUI: Magnetometer erişilemedi -', e.error.message);
-                this._calibration.magSensor = null;
-            });
-
-            sensor.start();
-            this._calibration.magSensor = sensor;
-
-        } catch (e) {
-            // İzin yok veya desteklenmiyor
-            console.warn('ARNavigationUI: Magnetometer API başlatılamadı -', e.message);
-        }
-    }
-
-    _stopMagnetometer() {
-        if (this._calibration.magSensor) {
-            try { this._calibration.magSensor.stop(); } catch (e) { /* ignore */ }
-            this._calibration.magSensor = null;
-        }
+    _recordIOSAccuracy(accuracy) {
+        if (typeof accuracy !== 'number' || isNaN(accuracy)) return;
+        this._calibration.iosAccuracy = accuracy;
     }
 
     // ────────────────────────────────────────
@@ -1439,37 +1623,54 @@ class ARNavigationUI {
      * Ham heading'i kaydeder ve periyodik olarak kalite kontrolü yapar.
      * @param {number} rawHeading - Filtrelenmemiş ham heading (0-360)
      */
-    _recordCalibrationSample(rawHeading) {
+    _recordCalibrationSample(rawHeading, turnRate) {
         if (!this.calibrationCheck) return;
 
         const cal = this._calibration;
         const T = ARNavigationUI.CALIBRATION_THRESHOLDS;
 
-        // Sample'ı kaydet
-        cal.rawSamples.push(rawHeading);
         cal.totalSamples++;
-        if (cal.rawSamples.length > T.SAMPLE_WINDOW) {
-            cal.rawSamples.shift();
-        }
+        cal.jumpFlags.push(0);
+        if (cal.jumpFlags.length > T.JUMP_WINDOW) cal.jumpFlags.shift();
+
+        // ── Sadece cihaz durağanken örnek topla ──
+        // Kullanıcı hedefe hizalanmak için döndüğünde heading dağılımı doğal
+        // olarak genişler; bu sensör kalitesi hakkında hiçbir şey söylemez.
+        // Ölçüm tools/compass-math-check.js TEST 4'te: 15Hz'de 20°/s'lik sıradan
+        // bir dönüş bile filtresiz metrikte POOR üretiyordu.
+        if (turnRate > T.STILL_RATE_DPS) return;
+
+        cal.stillSamples.push(rawHeading);
+        if (cal.stillSamples.length > T.SAMPLE_WINDOW) cal.stillSamples.shift();
 
         // Warmup süresi — yeterli veri toplanmadan kontrol yapma
-        if (cal.totalSamples < T.WARMUP_SAMPLES) return;
+        if (cal.stillSamples.length < T.WARMUP_SAMPLES) return;
 
         // Periyodik kontrol (her CHECK_INTERVAL_MS'de bir)
         const now = Date.now();
         if (now - cal.lastCheckTime < T.CHECK_INTERVAL_MS) return;
         cal.lastCheckTime = now;
 
-        // ── Kalite analizi ──
         this._evaluateCalibrationQuality();
     }
 
     /**
      * Sıçrama (jump rejection) olduğunda kalibrasyon istatistiğini günceller.
+     * Kayan pencere kullanılır — kümülatif oran oturum uzadıkça duyarsızlaşırdı.
      */
     _recordCalibrationJump() {
         if (!this.calibrationCheck) return;
-        this._calibration.totalJumps++;
+        const flags = this._calibration.jumpFlags;
+        if (flags.length > 0) flags[flags.length - 1] = 1;
+    }
+
+    /** Kayan pencere üzerinden sıçrama oranı (0-1) */
+    _computeJumpRate() {
+        const flags = this._calibration.jumpFlags;
+        if (flags.length === 0) return 0;
+        let sum = 0;
+        for (const f of flags) sum += f;
+        return sum / flags.length;
     }
 
     /**
@@ -1478,57 +1679,65 @@ class ARNavigationUI {
      * Metrikler:
      * 1. Heading standart sapması (dairesel) — sensör gürültüsü/tutarsızlık
      * 2. Sıçrama oranı — reddedilen reading'lerin toplama oranı
-     * 3. Manyetik alan gücü — normal aralıkta mı (Magnetometer varsa)
+     * 3. iOS webkitCompassAccuracy — sensörün kendi bildirdiği hata payı
      */
     _evaluateCalibrationQuality() {
         const cal = this._calibration;
         const T = ARNavigationUI.CALIBRATION_THRESHOLDS;
         const Q = ARNavigationUI.CALIBRATION_QUALITY;
 
-        const stdDev = this._computeCircularStdDev(cal.rawSamples);
-        const jumpRate = cal.totalSamples > 0
-            ? cal.totalJumps / cal.totalSamples
-            : 0;
-        const magField = cal.magField;
+        const stdDev = this._computeCircularStdDev(cal.stillSamples);
+        const jumpRate = this._computeJumpRate();
+        const iosAccuracy = cal.iosAccuracy;
 
         // ── Kalite seviyesini belirle (en kötü metrik kazanır) ──
         let quality = Q.GOOD;
 
-        // 1. Heading standart sapması
+        // 1. iOS'un bildirdiği doğruluk — varsa en güvenilir sinyal budur
+        if (iosAccuracy !== null) {
+            if (iosAccuracy < 0 || iosAccuracy > T.IOS_ACCURACY_POOR) {
+                quality = Q.POOR;
+            } else if (iosAccuracy > T.IOS_ACCURACY_FAIR) {
+                quality = this._worseQuality(quality, Q.FAIR);
+            }
+        }
+
+        // 2. Durağan heading standart sapması
         if (stdDev > T.HEADING_STD_POOR) {
             quality = Q.POOR;
         } else if (stdDev > T.HEADING_STD_FAIR) {
             quality = this._worseQuality(quality, Q.FAIR);
         }
 
-        // 2. Sıçrama oranı
+        // 3. Sıçrama oranı
         if (jumpRate > T.JUMP_RATE_POOR) {
             quality = Q.POOR;
         } else if (jumpRate > T.JUMP_RATE_FAIR) {
             quality = this._worseQuality(quality, Q.FAIR);
         }
 
-        // 3. Manyetik alan gücü (Magnetometer API varsa)
-        if (magField !== null) {
-            if (magField < T.MAG_FIELD_MIN || magField > T.MAG_FIELD_MAX) {
-                quality = Q.POOR;
-            }
-        }
-
-        // ── Sonucu uygula ──
         const prevQuality = cal.quality;
         cal.quality = quality;
 
-        // Kalite düştüyse → uyar
-        if (quality === Q.POOR && prevQuality !== Q.POOR) {
-            this._onCalibrationDegraded(quality, stdDev, jumpRate, magField);
-        }
-        // Kalite yükseldiyse → bildir
-        if (this._isQualityBetter(quality, prevQuality) && prevQuality !== Q.UNKNOWN) {
-            this._onCalibrationImproved(quality);
-        }
+        // ── Paneli her değerlendirmede güncelle ──
+        // Eskiden yalnızca "POOR'a düştü" ve "yükseldi" dallarında yazılıyordu;
+        // ilk değerlendirmede prevQuality daima UNKNOWN olduğu için iyi durumda
+        // panel kalıcı olarak boş kalıyordu.
+        this._updateDebugPanel({
+            calib: (ARNavigationUI._CALIB_LABELS[quality] || '?') +
+                   ' (σ=' + stdDev.toFixed(1) + '°)'
+        });
 
-        // Kalibrasyon durumunu debug panele yansıt (quality _onCalibrationDegraded/_onCalibrationImproved'da güncellenir)
+        if (quality === prevQuality) return;
+
+        const detail = { quality, stdDev, jumpRate, iosAccuracy };
+        if (this._isQualityBetter(quality, prevQuality)) {
+            if (prevQuality !== Q.UNKNOWN && this.onCalibrationImproved) {
+                this.onCalibrationImproved(detail);
+            }
+        } else if (this.onCalibrationNeeded) {
+            this.onCalibrationNeeded(detail);
+        }
     }
 
     // ────────────────────────────────────────
@@ -1562,35 +1771,6 @@ class ARNavigationUI {
         if (R >= 1) return 0;
         if (R <= 0) return 180;
         return Math.sqrt(-2 * Math.log(R)) * (180 / Math.PI);
-    }
-
-    // ────────────────────────────────────────
-    //  PRIVATE: Kalibrasyon Olayları
-    // ────────────────────────────────────────
-    // ────────────────────────────────────────
-    //  PRIVATE: Kalibrasyon Olayları
-    // ────────────────────────────────────────
-
-    _onCalibrationDegraded(quality, stdDev, jumpRate, magField) {
-        const detail = { quality, stdDev, jumpRate, magField };
-
-        this._updateDebugPanel({
-            calib: `${ARNavigationUI._CALIB_LABELS[quality] || '?'} (σ=${stdDev.toFixed(1)}°)`
-        });
-
-        if (this.onCalibrationNeeded) {
-            this.onCalibrationNeeded(detail);
-        }
-    }
-
-    _onCalibrationImproved(quality) {
-        this._updateDebugPanel({
-            calib: ARNavigationUI._CALIB_LABELS[quality] || '?'
-        });
-
-        if (this.onCalibrationImproved) {
-            this.onCalibrationImproved({ quality });
-        }
     }
 
     // ────────────────────────────────────────

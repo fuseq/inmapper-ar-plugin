@@ -33,6 +33,8 @@ class ARDirectionCalculator {
     constructor(options = {}) {
         this.segments = options.segments || [];
         this.maxSegments = options.maxSegments || 5;
+        // Bu açıdan fazla sapan segment "köşe" sayılır ve ortalamaya katılmaz.
+        this.maxTurnDeg = options.maxTurnDeg ?? 35;
     }
 
     // ================================================================
@@ -157,36 +159,84 @@ class ARDirectionCalculator {
     }
 
     /**
-     * Segmentlerden yönü hesaplar
-     * İlk noktadan son noktaya olan vektörü pusula açısına çevirir.
-     * SVG koordinat sistemi kullanılır (Y aşağı doğru artar).
-     * 
+     * Segmentlerden içinde bulunulan bacağın yönünü hesaplar.
+     *
+     * SVG koordinat sistemi kullanılır (Y aşağı doğru artar) ve ekranda yukarı
+     * yön 0° (kuzey) kabul edilir. Dikkat: bu, harita çerçevesindeki bir açıdır.
+     * Kat planları gerçek kuzeye hizalı çizilmediği için ARNavigationUI'a
+     * mekana ait `mapNorthOffset` değeri verilmeden ok gerçek dünyada sabit bir
+     * hatayla çalışır.
+     *
      * @returns {Object|null} Hesaplama sonucu veya null
-     * @returns {number} result.compassAngle - 0-360 derece pusula açısı
+     * @returns {number} result.compassAngle - 0-360 derece, harita çerçevesinde
      * @returns {string} result.compass - Pusula yönü adı
      * @returns {Array}  result.startPoint - Başlangıç noktası [x, y]
-     * @returns {Array}  result.endPoint - Bitiş noktası [x, y]
+     * @returns {Array}  result.endPoint - Bacağın bittiği nokta [x, y]
      * @returns {number} result.dx - X değişimi
      * @returns {number} result.dy - Y değişimi
+     * @returns {number} result.distance - Bacağın uzunluğu
+     * @returns {number} result.straightness - 0-1; 1 = düz koridor, düşük = zikzak
      * @returns {number} result.segmentsUsed - Kullanılan segment sayısı
+     * @returns {Object|null} result.turnAhead - Bacak sonundaki dönüş
+     *   ({angle, relative: 'left'|'right', afterDistance}) veya köşe yoksa null
      */
     calculate() {
         if (!this.segments || this.segments.length === 0) {
             return null;
         }
 
-        const segs = this.segments.slice(0, this.maxSegments);
-        const start = [segs[0].x1, segs[0].y1];
-        const last = segs[segs.length - 1];
+        const window = this.segments.slice(0, this.maxSegments);
+        const start = [window[0].x1, window[0].y1];
+
+        // ── Köşeye kadar olan bacağı seç ──
+        // Baştan sona düz kiriş çekmek, güzergâh pencere içinde dönüyorsa
+        // kullanıcıya iki bacağın ortalamasını gösterir — koridor dönemecinde
+        // duvarı işaret edebilir. Bunun yerine ilk segmentten belirgin şekilde
+        // sapan ilk segmentte duruyoruz: gösterilen yön daima içinde bulunulan
+        // bacağın yönü olur, dönüş bir sonraki adımda anlatılır.
+        const accepted = [];
+        let refAngle = null;
+        let turnAhead = null;
+
+        for (const seg of window) {
+            const sdx = seg.x2 - seg.x1;
+            const sdy = seg.y2 - seg.y1;
+            const len = Math.hypot(sdx, sdy);
+            if (len < 1) continue; // gürültü segmenti
+
+            const angle = (Math.atan2(sdx, -sdy) * 180 / Math.PI + 360) % 360;
+            if (refAngle === null) {
+                refAngle = angle;
+            } else if (ARDirectionCalculator.angleDifference(angle, refAngle) > this.maxTurnDeg) {
+                // Köşe bulundu — buradan sonrası bir sonraki bacak
+                turnAhead = {
+                    angle,
+                    relative: ARDirectionCalculator.getTurnDirection(refAngle, angle, this.maxTurnDeg),
+                    afterDistance: accepted.reduce((s, a) => s + a.len, 0)
+                };
+                break;
+            }
+            accepted.push({ seg, sdx, sdy, len, angle });
+        }
+
+        if (accepted.length === 0) return null;
+
+        const last = accepted[accepted.length - 1].seg;
         const end = [last.x2, last.y2];
 
-        const dx = end[0] - start[0];
-        const dy = end[1] - start[1];
+        // Kabul edilen bacak boyunca uzunlukla ağırlıklı ortalama yön.
+        // Segmentler eşdoğrusalsa bu, baştan sona kirişle birebir aynıdır.
+        const dx = accepted.reduce((s, a) => s + a.sdx, 0);
+        const dy = accepted.reduce((s, a) => s + a.sdy, 0);
 
         // SVG koordinat sisteminde Y aşağı doğru artar
         // atan2(dx, -dy) ile kuzey=0° referanslı açı hesaplanır
-        const angleRad = Math.atan2(dx, -dy);
-        const angleDeg = (angleRad * 180 / Math.PI + 360) % 360;
+        const angleDeg = (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
+
+        // Düzlük: birim segment yönlerinin bileşke uzunluğu (0-1).
+        // 1'e yakın = düz koridor, düşük = zikzak, yön daha az anlamlı.
+        const totalLen = accepted.reduce((s, a) => s + a.len, 0);
+        const straightness = totalLen > 0 ? Math.hypot(dx, dy) / totalLen : 0;
 
         return {
             compassAngle: angleDeg,
@@ -195,7 +245,10 @@ class ARDirectionCalculator {
             endPoint: end,
             dx: dx,
             dy: dy,
-            segmentsUsed: segs.length
+            distance: totalLen,
+            straightness: straightness,
+            segmentsUsed: accepted.length,
+            turnAhead: turnAhead
         };
     }
 

@@ -6,54 +6,136 @@
     <title>AR Direction Plugin - Demo</title>
     <script src="ar-direction.js"></script>
     <script src="ar-navigation-ui.js"></script>
+    <style>
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #101418;
+            color: #e8edf2;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        .panel {
+            width: min(420px, 88vw);
+            padding: 28px;
+            border-radius: 16px;
+            background: #1a2027;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, .45);
+        }
+        h1 { margin: 0 0 6px; font-size: 20px; }
+        .sub { margin: 0 0 22px; font-size: 13px; color: #8fa0b0; line-height: 1.5; }
+        .row {
+            display: flex; justify-content: space-between; gap: 12px;
+            padding: 9px 0; border-bottom: 1px solid rgba(255, 255, 255, .07);
+            font-size: 14px;
+        }
+        .row:last-of-type { border-bottom: none; }
+        .row span:first-child { color: #8fa0b0; }
+        .row span:last-child { font-weight: 600; font-variant-numeric: tabular-nums; }
+        button {
+            width: 100%; margin-top: 22px; padding: 15px;
+            border: none; border-radius: 12px;
+            background: linear-gradient(135deg, #7daef1, #5c9de8);
+            color: #fff; font-size: 16px; font-weight: 600; cursor: pointer;
+        }
+        button:active { transform: scale(.985); }
+        .note {
+            margin-top: 16px; font-size: 12px; line-height: 1.6; color: #7d8b99;
+        }
+    </style>
 </head>
 <body>
+<div class="panel">
+    <h1>AR Yön Bulma</h1>
+    <p class="sub">Hesaplanan güzergâh yönü aşağıda. Kamerayı ve pusulayı
+        başlatmak için butona dokunun.</p>
+
+    <div class="row"><span>Harita açısı</span><span id="mapAngle">–</span></div>
+    <div class="row"><span>Yön</span><span id="compassName">–</span></div>
+    <div class="row"><span>Düzlük</span><span id="straightness">–</span></div>
+    <div class="row"><span>Sonraki dönüş</span><span id="turnAhead">–</span></div>
+    <div class="row"><span>Cihaz açısı</span><span id="effAngle">–</span></div>
+
+    <button id="startBtn">AR&#39;ı Başlat</button>
+
+    <p class="note">
+        Kamera ve hareket sensörleri yalnızca HTTPS üzerinde ve kullanıcı
+        dokunuşuyla açılabilir; iOS izin penceresi bu yüzden butona bağlıdır.
+    </p>
+</div>
+
 <script>
-    // ── Demo Segmentleri ──
+    // ── Demo güzergâhı: kuzeye giden bir koridor, sonunda sağa dönüş ──
     const segments = [
-        { x1: 1378.973, y1: 1468.116, x2: 1406.603, y2: 1452.788 },
-        { x1: 1406.603, y1: 1452.788, x2: 1450.234, y2: 1420.567 },
-        { x1: 1450.234, y1: 1420.567, x2: 1520.456, y2: 1380.123 },
-        { x1: 1520.456, y1: 1380.123, x2: 1600.789, y2: 1350.456 },
-        { x1: 1600.789, y1: 1350.456, x2: 1680.123, y2: 1320.789 }
+        { x1: 1378.973, y1: 1468.116, x2: 1380.100, y2: 1380.000 },
+        { x1: 1380.100, y1: 1380.000, x2: 1381.400, y2: 1290.000 },
+        { x1: 1381.400, y1: 1290.000, x2: 1382.000, y2: 1200.000 },
+        { x1: 1382.000, y1: 1200.000, x2: 1470.000, y2: 1198.000 },
+        { x1: 1470.000, y1: 1198.000, x2: 1560.000, y2: 1196.000 }
     ];
 
-    // ── Hesapla & Başlat ──
+    // ── Mekana ait kalibrasyon ──
+    // mapNorthOffset: kat planının kuzeyinin gerçek kuzeye göre sapması.
+    // SVG dosyalarında kuzey referansı bulunmadığı için mekan başına bir kez
+    // ölçülmelidir; 0 bırakılırsa oklar sabit bir hatayla çalışır.
+    const VENUE = {
+        mapNorthOffset: 0,
+        magneticDeclination: 6   // İstanbul için yaklaşık +6° (NOAA)
+    };
+
     const dir = new ARDirectionCalculator({ segments, maxSegments: 5 }).calculate();
 
+    const $ = (id) => document.getElementById(id);
+
     if (!dir) {
-        document.body.textContent = 'Yön hesaplanamadı';
+        $('startBtn').disabled = true;
+        $('startBtn').textContent = 'Yön hesaplanamadı';
     } else {
+        $('mapAngle').textContent = dir.compassAngle.toFixed(1) + '°';
+        $('compassName').textContent = dir.compass;
+        $('straightness').textContent = dir.straightness.toFixed(2) +
+            ' (' + dir.segmentsUsed + ' segment)';
+        $('turnAhead').textContent = dir.turnAhead
+            ? (dir.turnAhead.relative === 'right' ? 'Sağa' : 'Sola') +
+              ' — ' + Math.round(dir.turnAhead.afterDistance) + ' birim sonra'
+            : 'Yok';
+
         let nav = null;
 
+        function buildNav() {
+            return new ARNavigationUI({
+                targetAngle: dir.compassAngle,
+                mapNorthOffset: VENUE.mapNorthOffset,
+                magneticDeclination: VENUE.magneticDeclination,
+                tolerance: 12,
+                progressDuration: 3,
+                showPopup: true,
+                popupMessage: dir.turnAhead
+                    ? 'Koridorun sonuna geldiniz'
+                    : 'Hedefe ulaştınız!',
+                popupButtonText: 'Tamam',
+                showDebugPanel: true,
+                onPopupDismiss: () => startAR(),
+                onError: (e) => console.error('AR Hata:', e)
+            });
+        }
+
         function startAR() {
-            if (nav) {
-                nav.setTargetAngle(dir.compassAngle);
-            } else {
-                nav = new ARNavigationUI({
-                    targetAngle: dir.compassAngle,
-                    tolerance: 10,
-                    progressDuration: 3,
-                    showPopup: true,
-                    popupMessage: 'Hedefe ulaştınız!',
-                    popupButtonText: 'Tamam',
-                    showDebugPanel: true,
-                    arrowImages: {
-                        left: './assets/left_arrow.png',
-                        right: './assets/right_arrow.png',
-                        forward: './assets/ileri.png',
-                        forwardPerspective: './assets/ileri_perspective.png'
-                    },
-                    popupImage: './assets/check.png',
-                    loadingImage: './assets/location.gif',
-                    onPopupDismiss: () => startAR(),
-                    onError: (e) => console.error('AR Hata:', e)
-                });
-            }
+            if (!nav) nav = buildNav();
+            else nav.setTargetAngle(dir.compassAngle);
             nav.start();
         }
 
-        startAR();
+        // iOS'ta DeviceOrientationEvent.requestPermission() ve getUserMedia
+        // yalnızca kullanıcı jesti içinde çağrılabilir. Sayfa yüklenirken
+        // çağrılırsa izin sessizce reddedilir.
+        $('startBtn').addEventListener('click', startAR);
+
+        const effective = ((dir.compassAngle + VENUE.mapNorthOffset -
+            VENUE.magneticDeclination) % 360 + 360) % 360;
+        $('effAngle').textContent = effective.toFixed(1) + '°';
     }
 </script>
 </body>
