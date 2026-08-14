@@ -221,8 +221,8 @@ class ARNavigationUI {
                 opacity: 1;
             }
             50% {
-                transform: perspective(700px) translateZ(-120px) scale(0.7) translateY(-12px);
-                opacity: 0.45;
+                transform: perspective(700px) translateZ(-40px) scale(0.9) translateY(-4px);
+                opacity: 0.75;
             }
         }
 
@@ -233,11 +233,11 @@ class ARNavigationUI {
         /* Yatay telefonda zemindeki ok: koridor boyunca ileri-geri salınır */
         @keyframes arnForwardBack {
             0%, 100% {
-                transform: translateY(20px) scale(0.92);
-                opacity: 0.65;
+                transform: translateY(8px) scale(0.97);
+                opacity: 0.85;
             }
             50% {
-                transform: translateY(-20px) scale(1.05);
+                transform: translateY(-8px) scale(1.02);
                 opacity: 1;
             }
         }
