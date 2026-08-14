@@ -80,6 +80,18 @@ class ARNavigationUI {
         // sıçramasıdır, gerçek hareket değil.
         MAX_TURN_RATE_DPS: 600,
         JUMP_GRACE_MS: 250,          // Bu süre boyunca ısrar eden sıçrama kabul edilir
+
+        // ── Jiroskop füzyonu (tamamlayıcı filtre) ──
+        // Yönü kısa vadede jiroskop taşır, pusula uzun vadede geri çeker.
+        // Zaman sabiti, pusulaya çekilme hızıdır: küçük değer pusulaya çok
+        // güvenir (manyetik sıçramalar geçer), büyük değer jiroskopa güvenir
+        // (kayma birikir). Kalite düştüğünde otomatik olarak büyür.
+        FUSION_TAU_MS: 1200,
+        FUSION_TAU_POOR_MS: 4000,
+
+        // Tek bir jiroskop örneğinin taşıyabileceği max açı. Bunu aşan fark
+        // dejenere yönelim okumasıdır (gimbal), gerçek dönüş değil.
+        FUSION_MAX_STEP_DEG: 45,
     };
 
     /** Kalibrasyon tespit eşik değerleri */
@@ -479,6 +491,14 @@ class ARNavigationUI {
         this.anchorDriftCorrection = options.anchorDriftCorrection === true;
         this.anchorDriftRateDps = options.anchorDriftRateDps ?? 0.5;
 
+        // ── Jiroskop füzyonu (tamamlayıcı filtre) ──
+        // Çapa kurulmadan da jiroskoptan faydalanır: yönü kısa vadede jiroskop
+        // taşır, pusula uzun vadede geri çeker. Kullanıcıdan hiçbir şey
+        // istemez. Ani manyetik bozulmaları (asansör, çelik kapı, yürüyen
+        // merdiven) süzer; binanın kalıcı sapmasını gideremez, onun için çapa
+        // gerekir.
+        this.gyroFusion = options.gyroFusion !== false;
+
         // Kalibrasyon konfigürasyonu
         this.calibrationCheck = options.calibrationCheck !== false;
 
@@ -522,6 +542,10 @@ class ARNavigationUI {
         this._lastSampleTime = 0;
         this._jumpRejectMs = 0;
 
+        // İlk gerçek pusula okumasına kadar heading anlamsızdır (0 ile başlar).
+        // Füzyon o okumayı yumuşatmadan doğrudan kurar.
+        this._headingInitialized = false;
+
         // ── Göreli yönelim (jiroskop) durumu ──
         // Manyetometreden bağımsız akış. Çapa kurulana kadar yalnızca izlenir,
         // kurulduktan sonra heading'i süren kaynak bu olur.
@@ -529,6 +553,9 @@ class ARNavigationUI {
         this._relHeading = null;
         this._relConfidence = 0;
         this._relReady = false;
+
+        // Füzyonda bir önceki göreli okuma; farkı heading'e taşımak için tutulur
+        this._fusionLastRel = null;
         this._anchor = {
             active: false,
             mapHeading: 0,   // Çapa anında kameranın baktığı harita açısı
@@ -590,6 +617,17 @@ class ARNavigationUI {
     get canAnchor() { return this._relReady; }
 
     /**
+     * Jiroskop füzyonu şu an heading'i sürüyor mu.
+     *
+     * Sadece açık olması yetmez: göreli yönelim akışının da veri veriyor
+     * olması gerekir. Cihaz jiroskopsuzsa veya izin verilmemişse filtre
+     * sessizce devre dışı kalır, heading doğrudan pusuladan üretilir.
+     */
+    get gyroFusionActive() {
+        return this.gyroFusion && this._relReady && !this._anchor.active;
+    }
+
+    /**
      * Hedef açının currentHeading ile karşılaştırılabilir hali.
      *
      * targetAngle daima harita çerçevesindedir. Çapa kuruluyken currentHeading
@@ -641,6 +679,7 @@ class ARNavigationUI {
         this._headingBuffer = [];
         this._lastRawHeading = null;
         this._jumpRejectMs = 0;
+        this._fusionLastRel = null;
         this._currentHeading = target;
 
         this._updateDebugPanel({ source: 'çapa (jiroskop)' });
@@ -655,11 +694,17 @@ class ARNavigationUI {
         this._headingBuffer = [];
         this._lastRawHeading = null;
         this._jumpRejectMs = 0;
+        this._fusionLastRel = null;
     }
 
     /** Açıyı 0-360 aralığına indirger */
     static _norm360(a) {
         return ((a % 360) + 360) % 360;
+    }
+
+    /** a - b farkını [-180, 180] aralığında verir (işaret dönüş yönünü taşır) */
+    static _signedDiff(a, b) {
+        return ((a - b + 180) % 360 + 360) % 360 - 180;
     }
 
     /** Aktif pusula kaynağı ('absolute-event' | 'webkit-compass' | 'absolute-flag' | 'sensor-api' | 'fallback-rotation' | 'none') */
@@ -991,8 +1036,9 @@ class ARNavigationUI {
      * Cihazın -Z ekseni (arka kamera doğrultusu) Dünya çerçevesine taşınır ve
      * yatay düzleme izdüşürülür. Telefon hangi açıda tutulursa tutulsun —
      * portre, yatay, eğik — kameranın gerçekten baktığı yön elde edilir.
-     * Ekran yönünden (portre/yatay) tamamen bağımsızdır; doğrulaması
-     * tools/compass-math-check.js TEST 1 ve TEST 2'de.
+     * Ekran yönünden (portre/yatay) tamamen bağımsızdır: cihaz kendi ekseni
+     * etrafında çevrildiğinde alpha/beta/gamma üçlüsü değişse de bu hesabın
+     * sonucu sabit kalır.
      *
      * Dönen `confidence`, izdüşüm vektörünün büyüklüğüdür (0-1):
      * kamera ufka paralelken 1, tavana veya zemine bakarken 0'a iner.
@@ -1135,7 +1181,10 @@ class ARNavigationUI {
             this._relConfidence = confidence;
             this._relReady = true;
 
-            if (!this._anchor.active) return;
+            if (!this._anchor.active) {
+                this._propagateFusion(heading, confidence);
+                return;
+            }
 
             const mapHeading = ARNavigationUI._norm360(heading + this._anchor.offset);
             this._handleCompass(mapHeading, e.beta, confidence, 'anchored');
@@ -1286,6 +1335,8 @@ class ARNavigationUI {
         this._jumpRejectMs = 0;
         this._relReady = false;
         this._relHeading = null;
+        this._fusionLastRel = null;
+        this._headingInitialized = false;
 
         // ── Çapa geçersiz kılınır ──
         // Göreli akışın referansı keyfidir ve akış yeniden başladığında farklı
@@ -1380,6 +1431,71 @@ class ARNavigationUI {
     }
 
     /**
+     * Jiroskoptan gelen dönüşü heading'e taşır (tamamlayıcı filtrenin tahmin adımı).
+     *
+     * Göreli yönelim mutlak bir yön bilmez ama dönüşü pusuladan çok daha temiz
+     * ölçer: gürültüsüz, gecikmesiz ve manyetik bozulmadan bağımsız. Burada
+     * yalnızca iki okuma arasındaki fark kullanılır, mutlak değeri kullanılmaz.
+     *
+     * @param {number} relHeading - Göreli akışın verdiği yön (0-360)
+     * @param {number} confidence - Okumanın güvenilirliği (0-1)
+     */
+    _propagateFusion(relHeading, confidence) {
+        if (!this.gyroFusion) return;
+
+        const H = ARNavigationUI.HEADING;
+
+        // Kamera tavana/zemine bakıyorsa göreli okuma da dejeneredir; süreklilik
+        // koptuğu için bir sonraki farkın taşınmaması gerekir.
+        if (confidence < H.MIN_CONFIDENCE) {
+            this._fusionLastRel = null;
+            return;
+        }
+
+        if (this._fusionLastRel !== null && this._headingInitialized) {
+            const delta = ARNavigationUI._signedDiff(relHeading, this._fusionLastRel);
+            if (Math.abs(delta) <= H.FUSION_MAX_STEP_DEG) {
+                this._currentHeading = ARNavigationUI._norm360(this._currentHeading + delta);
+                if (this._running && !this._completed) this._updateArrows();
+            }
+        }
+
+        this._fusionLastRel = relHeading;
+    }
+
+    /**
+     * Pusula okumasını heading'e uygular (tamamlayıcı filtrenin düzeltme adımı).
+     *
+     * Jiroskop akışı yoksa okuma doğrudan yazılır — davranış eski haliyle aynı
+     * kalır. Akış varsa heading pusulaya bir anda atlamaz, zaman sabitiyle
+     * yavaşça çekilir: ani manyetik sıçramalar süzülür, kalıcı fark yine de
+     * takip edilir. Pusula kalitesi düştüğünde çekim daha da yavaşlatılır.
+     *
+     * @param {number} smoothed - Filtrelenmiş pusula okuması (0-360)
+     * @param {number} dtMs     - Bir önceki örnekten geçen süre
+     * @param {'magnetic'|'anchored'} kind
+     */
+    _applyCompassCorrection(smoothed, dtMs, kind) {
+        // İlk gerçek okuma heading'i doğrudan kurar. Yavaşça çekilseydi ok
+        // başlangıçtaki anlamsız değerden gerçek yöne saniyeler içinde sürünürdü.
+        if (kind === 'anchored' || !this.gyroFusion || !this._relReady ||
+            this._fusionLastRel === null || !this._headingInitialized) {
+            this._currentHeading = smoothed;
+            this._headingInitialized = true;
+            return;
+        }
+
+        const H = ARNavigationUI.HEADING;
+        const poor = this._calibration.quality === ARNavigationUI.CALIBRATION_QUALITY.POOR;
+        const tau = poor ? H.FUSION_TAU_POOR_MS : H.FUSION_TAU_MS;
+
+        const gain = Math.min(1, Math.max(0, (dtMs > 0 ? dtMs : 16) / tau));
+        const diff = ARNavigationUI._signedDiff(smoothed, this._currentHeading);
+
+        this._currentHeading = ARNavigationUI._norm360(this._currentHeading + gain * diff);
+    }
+
+    /**
      * @param {number} rawHeading - Ham heading (0-360)
      * @param {number} beta       - Cihaz eğimi
      * @param {number} confidence - Okumanın güvenilirliği (0-1)
@@ -1431,7 +1547,7 @@ class ARNavigationUI {
         // Sensör referans çerçevesi canlı tutulur, tekrar start'ta
         // heading zaten güncel ve kararlıdır.
         const smoothed = this._smoothHeading(rawHeading, confidence, dtMs);
-        if (smoothed !== null) this._currentHeading = smoothed;
+        if (smoothed !== null) this._applyCompassCorrection(smoothed, dtMs, kind);
 
         // ── Navigasyon aktif değilse sadece heading takibi yap ──
         if (!this._running || this._completed) return;
@@ -1849,8 +1965,8 @@ class ARNavigationUI {
         // ── Sadece cihaz durağanken örnek topla ──
         // Kullanıcı hedefe hizalanmak için döndüğünde heading dağılımı doğal
         // olarak genişler; bu sensör kalitesi hakkında hiçbir şey söylemez.
-        // Ölçüm tools/compass-math-check.js TEST 4'te: 15Hz'de 20°/s'lik sıradan
-        // bir dönüş bile filtresiz metrikte POOR üretiyordu.
+        // Ölçüldü: 15Hz ateşleyen bir cihazda 20°/s'lik sıradan bir dönüş bile
+        // filtresiz metrikte 15°'lik standart sapma, yani sahte POOR üretiyor.
         if (turnRate > T.STILL_RATE_DPS) return;
 
         cal.stillSamples.push(rawHeading);

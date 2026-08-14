@@ -509,6 +509,178 @@ section('11. Kapi cizgisinden capa acisi');
 }
 
 // ────────────────────────────────────────────────────────────
+section('12. Jiroskop fuzyonu (capasiz)');
+// ────────────────────────────────────────────────────────────
+{
+    /** Heading'i gercek bir pusula okumasiyla kurar */
+    function prime(nav, heading) {
+        feed(nav, [heading, heading, heading], 30);
+        nav._relReady = true;
+    }
+
+    // Jiroskop akisi yokken davranis eskisiyle ayni kalmali
+    {
+        const nav = makeNav();
+        feed(nav, [100, 100, 100], 30);
+        check('jiroskop akisi yokken heading dogrudan pusulayi izliyor',
+            angDiff(nav.currentHeading, 100) < 0.5, 'gelen ' + nav.currentHeading);
+    }
+
+    // Jiroskop donusu heading'e birebir tasiniyor
+    {
+        const nav = makeNav();
+        prime(nav, 100);
+        nav._propagateFusion(0, 1);
+        nav._propagateFusion(30, 1);
+        check('jiroskop donusu heading e tasiniyor',
+            angDiff(nav.currentHeading, 130) < 1e-6, 'gelen ' + nav.currentHeading);
+    }
+
+    // Cihaz donmuyorken pusulanin kaymasi oka yansimamali.
+    // Sicrama reddine takilmamak icin kayma yavas yapilir (gercek manyetik
+    // bozulma da boyle olur: celik kapinin yanindan gecerken alan burulur).
+    {
+        const nav = makeNav();
+        prime(nav, 100);
+        nav._propagateFusion(0, 1);
+        for (let i = 1; i <= 10; i++) {
+            nav._propagateFusion(0, 1);      // jiroskop: donus yok
+            feed(nav, [100 + i * 4], 30);    // pusula: 100 -> 140
+        }
+        check('yavas manyetik kayma oka yansimiyor',
+            angDiff(nav.currentHeading, 100) < 10,
+            'pusula 140 iken heading ' + nav.currentHeading.toFixed(1));
+    }
+
+    // Kalici fark yine de takip edilmeli, yoksa fuzyon kaymayi kalicilastirir
+    {
+        const nav = makeNav();
+        prime(nav, 100);
+        nav._propagateFusion(0, 1);
+        for (let i = 0; i < 200; i++) {
+            nav._propagateFusion(0, 1);
+            feed(nav, [140], 30);
+        }
+        check('kalici pusula farki sonunda takip ediliyor',
+            angDiff(nav.currentHeading, 140) < 2,
+            'gelen ' + nav.currentHeading.toFixed(1));
+    }
+
+    // Dejenere okuma (kamera tavanda) sureklilik kesmeli, savurmamali
+    {
+        const nav = makeNav();
+        prime(nav, 100);
+        nav._propagateFusion(0, 1);
+        nav._propagateFusion(50, 0.05);   // guven esigin altinda
+        nav._propagateFusion(80, 1);      // yeni referans
+        nav._propagateFusion(90, 1);      // 10 derece donus
+        check('dejenere jiroskop okumasi heading i savurmuyor',
+            angDiff(nav.currentHeading, 110) < 1e-6, 'gelen ' + nav.currentHeading);
+    }
+
+    // Tek adimda fiziksel olmayan sicrama tasinmamali
+    {
+        const nav = makeNav();
+        prime(nav, 100);
+        nav._propagateFusion(0, 1);
+        nav._propagateFusion(60, 1);
+        check('45 derece ustu tek adim reddediliyor',
+            angDiff(nav.currentHeading, 100) < 1e-6, 'gelen ' + nav.currentHeading);
+    }
+
+    // Kapatilabilir olmali
+    {
+        const nav = makeNav({ gyroFusion: false });
+        prime(nav, 100);
+        nav._propagateFusion(0, 1);
+        nav._propagateFusion(30, 1);
+        check('gyroFusion:false iken jiroskop heading i surmuyor',
+            angDiff(nav.currentHeading, 100) < 0.5, 'gelen ' + nav.currentHeading);
+    }
+
+    // Ilk okuma yumusatilmadan kurulmali, yoksa ok gercek yone surunerek gider
+    {
+        const nav = makeNav();
+        nav._relReady = true;
+        nav._propagateFusion(0, 1);
+        feed(nav, [250], 30);
+        check('ilk pusula okumasi heading i dogrudan kuruyor',
+            angDiff(nav.currentHeading, 250) < 1e-6, 'gelen ' + nav.currentHeading);
+    }
+
+    // Kalite kotuyken pusulaya cekilme yavaslamali
+    {
+        const good = makeNav();
+        prime(good, 100);
+        good._propagateFusion(0, 1);
+
+        const poor = makeNav();
+        prime(poor, 100);
+        poor._propagateFusion(0, 1);
+        poor._calibration.quality = ARNavigationUI.CALIBRATION_QUALITY.POOR;
+
+        for (let i = 1; i <= 10; i++) {
+            good._propagateFusion(0, 1); feed(good, [100 + i * 4], 30);
+            poor._propagateFusion(0, 1); feed(poor, [100 + i * 4], 30);
+        }
+        check('kalibrasyon kotuyken jiroskopa daha cok guveniliyor',
+            angDiff(poor.currentHeading, 100) < angDiff(good.currentHeading, 100),
+            'poor ' + poor.currentHeading.toFixed(1) + ' / good ' + good.currentHeading.toFixed(1));
+    }
+}
+
+// ────────────────────────────────────────────────────────────
+section('13. iOS heading modeli (saha olcumune karsi)');
+// ────────────────────────────────────────────────────────────
+{
+    // 14.08.2026, iPhone iOS 26.6 / CriOS 151 ile alinan ham olcumler.
+    // truth: o an elle girilen gercek yon, wk: webkitCompassHeading.
+    const MARKS = [
+        { truth: 233, beta: 86.816, gamma: 0.052,  wk: 232.476 },
+        { truth: 324, beta: 83.731, gamma: 34.687, wk: 323.365 },
+        { truth: 47,  beta: 84.239, gamma: 23.755, wk: 47.916  },
+        { truth: 119, beta: 82.477, gamma: -5.978, wk: 117.722 },
+        { truth: 170, beta: 84.655, gamma: 31.062, wk: 173.418 },
+        { truth: 280, beta: 76.915, gamma: 18.307, wk: 281.238 }
+    ];
+
+    const signed = (a, b) => ((a - b + 180) % 360 + 360) % 360 - 180;
+    const absMean = (a) => a.reduce((s, v) => s + Math.abs(v), 0) / a.length;
+    const viaMatrix = (m) => ARNavigationUI._computeHeadingFromRotationMatrix(
+        (360 - m.wk) % 360, m.beta, m.gamma).heading;
+
+    // Mevcut model: webkitCompassHeading dogrudan kamera yonu olarak kullanilir
+    const newErrs = MARKS.map(m => signed(m.wk, m.truth));
+    check('mevcut iOS modeli saha gercegini 5 derece altinda tutturuyor',
+        absMean(newErrs) < 5, 'ortalama ' + absMean(newErrs).toFixed(1) + ' derece');
+
+    // Eski hata: wk'yi rotasyon matrisinden gecirmek gamma'yi ikinci kez uygular.
+    // Bu kontrol, birileri o yolu geri getirirse fark edilmesini saglar.
+    const oldErrs = MARKS.map(m => signed(viaMatrix(m), m.truth));
+    check('wk yi matristen gecirmek hatayi buyutuyor (eski yol geri gelmemeli)',
+        absMean(oldErrs) > 3 * absMean(newErrs),
+        'eski ' + absMean(oldErrs).toFixed(1) + ' / yeni ' + absMean(newErrs).toFixed(1));
+
+    // Teshisin kendisi: iki model arasindaki fark tam olarak -gamma olmali.
+    // Elle girilen gercek yonun gurultusunden arindirmak icin sensorun kendi
+    // degeriyle karsilastirilir. beta 90 dan uzaklastikca kucuk artik kalir.
+    const residuals = MARKS.map(m => Math.abs(signed(viaMatrix(m), m.wk) - (-m.gamma)));
+    check('iki model arasindaki fark gamma nin kendisi',
+        Math.max(...residuals) < 2, 'en buyuk artik ' + Math.max(...residuals).toFixed(2));
+
+    // Duzeltme guveni alpha=0 ile hesapliyor; ancak izdusum alpha dan
+    // bagimsizsa dogru olur.
+    let confMax = 0;
+    for (const m of MARKS) {
+        const a = ARNavigationUI._computeHeadingFromRotationMatrix(0, m.beta, m.gamma).confidence;
+        const b = ARNavigationUI._computeHeadingFromRotationMatrix(
+            (360 - m.wk) % 360, m.beta, m.gamma).confidence;
+        confMax = Math.max(confMax, Math.abs(a - b));
+    }
+    check('guven metrigi alpha dan bagimsiz', confMax < 1e-9, 'fark ' + confMax);
+}
+
+// ────────────────────────────────────────────────────────────
 Date.now = realNow;
 console.log('\n' + '='.repeat(50));
 console.log(`Sonuc: ${passed} basarili, ${failed} basarisiz`);

@@ -172,7 +172,7 @@ kameranın baktığı yönü verir; yatırmadan (`gamma`) etkilenmez. Bu değeri
 geçirmek matematiksel olarak yanlıştır: matris `gamma`'yı ikinci kez uygular ve
 heading'e tam `gamma` kadar hata ekler. iPhone'da ölçüldü — telefon dik ve düz
 tutulduğunda hata sıfır, yana yatırıldıkça büyüyor, yatay moda geçince 90°'ye
-yaklaşıyor. Doğrulama: `node tools/ios-model-check.js`.
+yaklaşıyor. Saha ölçümleri test takımına gömülüdür (bölüm 13).
 
 Matristen yalnızca güven metriği alınır. Yatay izdüşümün büyüklüğü `alpha`'dan
 bağımsız olduğu için bu hesap `alpha = 0` ile yapılır ve sonuç tam doğrudur.
@@ -183,10 +183,10 @@ kullanılmaz; iOS'ta bunun yerine `webkitCompassAccuracy` okunur.
 ## Testler
 
 ```bash
-node tools/behaviour-check.js     # davranış regresyon testleri
-node tools/compass-math-check.js  # pusula matematiği doğrulama raporu
-node tools/ios-model-check.js     # iOS heading modeli, saha ölçümüne karşı
+node tools/behaviour-check.js
 ```
 
-`behaviour-check.js` minimal bir DOM taklidi ve kontrol edilebilir bir saat
-kurarak heading işleme hattını tarayıcısız test eder.
+Minimal bir DOM taklidi ve kontrol edilebilir bir saat kurarak heading işleme
+hattını tarayıcısız test eder. Son bölüm, iOS heading modelini sahadan alınmış
+gerçek ölçümlere karşı doğrular; gamma'nın ikinci kez uygulandığı eski yol geri
+gelirse test düşer.
