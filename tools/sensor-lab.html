@@ -105,6 +105,22 @@
 <input type="number" id="truth" placeholder="Gerçek yön (derece)" inputmode="decimal">
 <button id="markBtn" class="secondary" disabled>Ölçümü Kaydet</button>
 
+<h2>Test 3 — Jiroskop çapası</h2>
+<p class="note">Kapalı mekanda yapın. Uzaktaki sabit bir nesneye doğrultup
+    çapayı kurun; bu yön 0° kabul edilir. Sonra normal şekilde yürüyün,
+    dönün, koridorları dolaşın. Aynı nesneye geri dönüp doğrultun ve
+    "Sapmayı Ölç"e basın. Çapa sapması jiroskop kaymasını, pusula sapması ise
+    binanın manyetik alanı ne kadar bozduğunu gösterir.</p>
+<div class="card">
+    <div class="row"><span>Durum</span><span id="anState">kurulmadı</span></div>
+    <div class="row"><span>Çapalı yön</span><span id="anHeading">–</span></div>
+    <div class="row"><span>Pusula yönü</span><span id="anCompass">–</span></div>
+    <div class="row"><span>Geçen süre</span><span id="anElapsed">–</span></div>
+</div>
+<button id="anchorBtn" class="secondary" disabled>Çapayı Kur (bu yön = 0°)</button>
+<button id="measureBtn" class="secondary" disabled>Sapmayı Ölç</button>
+<div class="card" style="margin-top:10px"><div class="log" id="anLog">Henüz ölçüm yok.</div></div>
+
 <h2>Kayıt</h2>
 <div class="card"><div class="log" id="log">Henüz ölçüm yok.</div></div>
 <button id="exportBtn" class="secondary">Kaydı JSON Olarak İndir</button>
@@ -120,7 +136,8 @@ const state = {
     matrix: null, naive: null,
     ref: null, refMax: 0, refOld: null, refMaxOld: 0,
     count: 0, lastRate: 0, marks: [],
-    trace: [], lastTrace: 0
+    trace: [], lastTrace: 0,
+    anchor: null
 };
 
 const isIOS = typeof DeviceOrientationEvent !== 'undefined' &&
@@ -247,6 +264,8 @@ $('permBtn').addEventListener('click', async () => {
     $('permBtn').disabled = true;
     $('lockBtn').disabled = false;
     $('markBtn').disabled = false;
+    $('anchorBtn').disabled = false;
+    startPlugin();
 });
 
 $('lockBtn').addEventListener('click', () => {
@@ -284,12 +303,90 @@ $('markBtn').addEventListener('click', () => {
     `\nDağılım: ${spread.toFixed(1)}°  ${spread < 10 ? '-> tutarli, sabit offset' : '-> dagilim yuksek, manyetik parazit'}`;
 });
 
+// ────────────────────────────────────────────────────────────
+//  Test 3 — jiroskop çapası
+//  Sayfa kendi kopyasını değil gerçek plugin kodunu çalıştırır; aksi halde
+//  ölçülen şey üründeki davranış olmazdı. Görsel katman gizlenir, çünkü
+//  burada ok değil sayısal sapma inceleniyor.
+// ────────────────────────────────────────────────────────────
+let nav = null;
+
+// Plugin izin adımında başlatılır: çapa butonuna basıldığında göreli akışın
+// çoktan akıyor olması gerekir, yoksa ilk dokunuş boşa giderdi.
+function startPlugin() {
+    nav = new ARNavigationUI({
+        targetAngle: 0,
+        manageCamera: false,
+        showPopup: false,
+        progressDuration: 99999   // oturum kendiliğinden tamamlanmasın
+    });
+    nav.start();
+    const root = document.querySelector('.arn-root');
+    if (root) root.style.display = 'none';
+}
+
+$('anchorBtn').addEventListener('click', () => {
+    if (!nav) return;
+
+    // Göreli akışın ilk örneği gelene kadar çapa kurulamaz
+    if (!nav.canAnchor) {
+        $('anState').textContent = 'jiroskop bekleniyor, tekrar deneyin';
+        $('anState').className = 'warn';
+        return;
+    }
+
+    if (!nav.setAnchor(0)) return;
+
+    state.anchor = {
+        at: Date.now(),
+        compassAtAnchor: state.heading,
+        measurements: []
+    };
+    $('anState').textContent = 'kurulu (jiroskop takibi)';
+    $('anState').className = 'ok';
+    $('measureBtn').disabled = false;
+});
+
+$('measureBtn').addEventListener('click', () => {
+    if (!nav || !nav.isAnchored || !state.anchor) return;
+
+    const anchorErr = Math.abs(((nav.currentHeading + 180) % 360 + 360) % 360 - 180);
+    const compassErr = angDiff(state.heading, state.anchor.compassAtAnchor);
+    const minutes = (Date.now() - state.anchor.at) / 60000;
+
+    state.anchor.measurements.push({
+        dakika: Number(minutes.toFixed(2)),
+        capaSapmasi: Number(anchorErr.toFixed(1)),
+        pusulaSapmasi: Number(compassErr.toFixed(1)),
+        capaliHeading: Number(nav.currentHeading.toFixed(1)),
+        pusulaHeading: Number(state.heading.toFixed(1))
+    });
+
+    $('anLog').textContent = state.anchor.measurements.map((m, i) =>
+        `${i + 1}. ${m.dakika.toFixed(1)} dk sonra  ` +
+        `capa ${m.capaSapmasi}\u00b0  pusula ${m.pusulaSapmasi}\u00b0`
+    ).join('\n') +
+    '\n\nCapa sapmasi jiroskop kaymasidir, zamanla yavasca buyumeli.' +
+    '\nPusula sapmasi binanin manyetik bozulmasidir, zaman yerine konuma bagli.';
+});
+
+function renderAnchor() {
+    if (nav && nav.isAnchored && state.anchor) {
+        $('anHeading').textContent = nav.currentHeading.toFixed(1) + '°';
+        $('anCompass').textContent = state.heading === null ? '–' : state.heading.toFixed(1) + '°';
+        $('anElapsed').textContent = ((Date.now() - state.anchor.at) / 60000).toFixed(1) + ' dk';
+    }
+    requestAnimationFrame(renderAnchor);
+}
+renderAnchor();
+
 $('exportBtn').addEventListener('click', () => {
     const blob = new Blob([JSON.stringify({
         userAgent: navigator.userAgent, isIOS,
         marks: state.marks,
         test1: { referans: state.ref, enBuyukSapmaYeni: state.refMax,
-                 enBuyukSapmaEski: state.refMaxOld, iz: state.trace }
+                 enBuyukSapmaEski: state.refMaxOld, iz: state.trace },
+        test3: state.anchor ? { olcumler: state.anchor.measurements } : null
     }, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
