@@ -113,22 +113,37 @@
 }
 
 .arn-anim-forward {
-    animation: arnJump 1s ease infinite;
+    transform-origin: center center;
+    animation: arnIntoScreen 1.6s ease-in-out infinite;
 }
 
-@keyframes arnJump {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-10px); }
+/* Dikey telefonda ekranın içine (uzağa) gidip geri gelme */
+@keyframes arnIntoScreen {
+    0%, 100% {
+        transform: perspective(700px) translateZ(0) scale(1);
+        opacity: 1;
+    }
+    50% {
+        transform: perspective(700px) translateZ(-120px) scale(0.7) translateY(-12px);
+        opacity: 0.45;
+    }
 }
 
 .arn-anim-forwardPerspective {
-    animation: arnApproach 1.8s ease-in-out infinite;
+    transform-origin: center center;
+    animation: arnForwardBack 1.4s ease-in-out infinite;
 }
 
-@keyframes arnApproach {
-    0%   { transform: scale(0.7) translateY(12px); opacity: 0.4; }
-    50%  { transform: scale(1.15) translateY(-4px); opacity: 1; }
-    100% { transform: scale(0.7) translateY(12px); opacity: 0.4; }
+/* Yatay telefonda koridor boyunca ileri-geri */
+@keyframes arnForwardBack {
+    0%, 100% {
+        transform: translateY(20px) scale(0.92);
+        opacity: 0.65;
+    }
+    50% {
+        transform: translateY(-20px) scale(1.05);
+        opacity: 1;
+    }
 }
 
 /* ===== YÜKLENİYOR EKRANI ===== */
