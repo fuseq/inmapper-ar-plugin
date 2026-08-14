@@ -130,6 +130,47 @@ class ARDirectionCalculator {
         return diff;
     }
 
+    /**
+     * Bir kapı çizgisinin baktığı yönü harita çerçevesinde hesaplar.
+     *
+     * SVG'de kapılar nokta değil çizgi segmentidir, dolayısıyla geometrik bir
+     * yönleri vardır. Kapının normali iki yöne bakabilir; hangisinin dışarı
+     * (koridora) baktığı `towardPoint` ile belirlenir — tipik olarak güzergâhın
+     * kapıdan sonraki ilk noktası verilir.
+     *
+     * Jiroskop çapası için kullanışlıdır: kullanıcı kapıdan çıkarken doğal
+     * olarak bu yöne bakar, dolayısıyla harita ile cihaz arasındaki ilişki
+     * manyetometreye hiç dokunmadan kurulabilir.
+     *
+     * @param {{x1:number,y1:number,x2:number,y2:number}} door - Kapı çizgisi
+     * @param {[number,number]} towardPoint - Normalin bakması istenen taraftaki nokta
+     * @returns {number|null} 0-360 derece harita açısı, dejenere geometride null
+     */
+    static doorFacing(door, towardPoint) {
+        if (!door || !towardPoint) return null;
+
+        const dx = door.x2 - door.x1;
+        const dy = door.y2 - door.y1;
+        if (Math.hypot(dx, dy) < 1e-9) return null;
+
+        const cx = (door.x1 + door.x2) / 2;
+        const cy = (door.y1 + door.y2) / 2;
+
+        // Kapı çizgisine dik iki adaydan biri
+        let nx = -dy;
+        let ny = dx;
+
+        // Hedef noktanın bulunduğu tarafa çevir
+        const towardX = towardPoint[0] - cx;
+        const towardY = towardPoint[1] - cy;
+        const projection = nx * towardX + ny * towardY;
+        if (Math.abs(projection) < 1e-9) return null; // nokta kapı çizgisi üzerinde
+        if (projection < 0) { nx = -nx; ny = -ny; }
+
+        // SVG'de Y aşağı artar; kuzey = yukarı
+        return (Math.atan2(nx, -ny) * 180 / Math.PI + 360) % 360;
+    }
+
     // ================================================================
     //  INSTANCE METODLARI
     // ================================================================

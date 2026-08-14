@@ -76,14 +76,15 @@
 
 <h2>Yöntem karşılaştırması</h2>
 <div class="card">
-    <div class="row"><span>Rotasyon matrisi</span><span id="mMatrix">–</span></div>
+    <div class="row"><span>Kullanılan (düzeltilmiş)</span><span id="mUsed">–</span></div>
+    <div class="row"><span>Eski model (matris)</span><span id="mMatrix">–</span></div>
     <div class="row"><span>360 − alpha (naif)</span><span id="mNaive">–</span></div>
     <div class="row"><span>webkitCompassHeading</span><span id="mWk">–</span></div>
-    <div class="row"><span>Matris − webkit farkı</span><span id="mDiff">–</span></div>
+    <div class="row"><span>Eski model hatası</span><span id="mDiff">–</span></div>
 </div>
-<p class="note">Telefonu dik tutarken bu üç değer birbirine yakın olmalı.
-    Telefonu yan çevirdiğinizde matris değeri sabit kalmalı, diğerleri kaymalı.
-    Kayma miktarı iOS dönüşümünün doğruluğunu belirler.</p>
+<p class="note">iPhone'da "eski model hatası" tam olarak gamma kadar çıkar.
+    Telefonu yan yatırdıkça büyür, dik tutunca sıfırlanır. Düzeltilmiş değerin
+    yatırmadan etkilenmemesi gerekir.</p>
 
 <h2>Test 1 — Ekran yönünden bağımsızlık</h2>
 <p class="note">Sabit bir nesneye doğrultun, "Referansı Sabitle"ye basın.
@@ -93,6 +94,7 @@
     <div class="row"><span>Referans</span><span id="refH">–</span></div>
     <div class="row"><span>Şu anki sapma</span><span id="refD">–</span></div>
     <div class="row"><span>En büyük sapma</span><span id="refMax">–</span></div>
+    <div class="row"><span>Eski modelde sapma</span><span id="refMaxOld">–</span></div>
 </div>
 <button id="lockBtn" class="secondary" disabled>Referansı Sabitle</button>
 
@@ -116,8 +118,9 @@ const state = {
     alpha: null, beta: null, gamma: null, absolute: null,
     wk: null, wa: null,
     matrix: null, naive: null,
-    ref: null, refMax: 0,
-    count: 0, lastRate: 0, marks: []
+    ref: null, refMax: 0, refOld: null, refMaxOld: 0,
+    count: 0, lastRate: 0, marks: [],
+    trace: [], lastTrace: 0
 };
 
 const isIOS = typeof DeviceOrientationEvent !== 'undefined' &&
@@ -132,19 +135,23 @@ function process(e, sourceLabel) {
     state.wk = (typeof e.webkitCompassHeading === 'number') ? e.webkitCompassHeading : null;
     state.wa = (typeof e.webkitCompassAccuracy === 'number') ? e.webkitCompassAccuracy : null;
 
-    // Plugin ile birebir aynı matematik
-    let alphaForMatrix = e.alpha;
-    if (state.wk !== null && !isNaN(state.wk)) {
-        alphaForMatrix = (360 - state.wk) % 360;
-        sourceLabel = 'webkit-compass';
-    }
+    const beta = e.beta ?? 90, gamma = e.gamma ?? 0;
 
-    if (alphaForMatrix != null && e.beta != null && e.gamma != null) {
-        const r = ARNavigationUI._computeHeadingFromRotationMatrix(
-            alphaForMatrix, e.beta, e.gamma);
-        state.matrix = r.heading;
-        state.confidence = r.confidence;
+    if (state.wk !== null && !isNaN(state.wk)) {
+        // iOS: CoreLocation değeri zaten kamera yönü. Matrise sokmak gamma'yı
+        // ikinci kez uygular ve heading'e gamma kadar hata ekler.
+        sourceLabel = 'webkit-compass';
+        state.heading = state.wk;
+        state.confidence =
+            ARNavigationUI._computeHeadingFromRotationMatrix(0, beta, gamma).confidence;
+        // Eski (hatalı) model — karşılaştırma için hâlâ hesaplanır
+        state.matrix = ARNavigationUI._computeHeadingFromRotationMatrix(
+            (360 - state.wk) % 360, beta, gamma).heading;
+    } else if (e.alpha != null) {
+        const r = ARNavigationUI._computeHeadingFromRotationMatrix(e.alpha, beta, gamma);
         state.heading = r.heading;
+        state.confidence = r.confidence;
+        state.matrix = r.heading;
     }
     if (e.alpha != null) state.naive = (360 - e.alpha) % 360;
     state.source = sourceLabel;
@@ -152,6 +159,22 @@ function process(e, sourceLabel) {
     if (state.ref !== null && state.heading !== null) {
         const d = angDiff(state.heading, state.ref);
         if (d > state.refMax) state.refMax = d;
+        const dOld = angDiff(state.matrix, state.refOld);
+        if (dOld > state.refMaxOld) state.refMaxOld = dOld;
+
+        // Test 1 kanıtı: yuvarlama sırasında iki modelin gamma'ya göre
+        // davranışı kaydedilir, hangisinin sabit kaldığı sonradan görülür.
+        if (state.trace.length < 4000 && Date.now() - state.lastTrace > 80) {
+            state.lastTrace = Date.now();
+            state.trace.push({
+                yeni: Number(state.heading.toFixed(1)),
+                eski: Number(state.matrix.toFixed(1)),
+                beta: Number(beta.toFixed(1)),
+                gamma: Number(gamma.toFixed(1)),
+                sapmaYeni: Number(d.toFixed(1)),
+                sapmaEski: Number(dOld.toFixed(1))
+            });
+        }
     }
 }
 
@@ -186,18 +209,21 @@ function render() {
         $('rwa').className = state.wa < 0 || state.wa > 25 ? 'bad' : state.wa > 12 ? 'warn' : 'ok';
     }
 
+    $('mUsed').textContent = f(state.heading);
     $('mMatrix').textContent = f(state.matrix);
     $('mNaive').textContent = f(state.naive);
     $('mWk').textContent = f(state.wk);
-    $('mDiff').textContent = (state.matrix !== null && state.wk !== null)
-        ? angDiff(state.matrix, state.wk).toFixed(1) + '°' : '–';
+    $('mDiff').textContent = (state.matrix !== null && state.heading !== null)
+        ? angDiff(state.matrix, state.heading).toFixed(1) + '°' : '–';
 
     $('refH').textContent = state.ref === null ? '–' : state.ref.toFixed(1) + '°';
     $('refD').textContent = (state.ref === null || state.heading === null)
         ? '–' : angDiff(state.heading, state.ref).toFixed(1) + '°';
     $('refMax').textContent = state.ref === null ? '–' : state.refMax.toFixed(1) + '°';
+    $('refMaxOld').textContent = state.ref === null ? '–' : state.refMaxOld.toFixed(1) + '°';
     if (state.ref !== null) {
         $('refMax').className = state.refMax < 5 ? 'ok' : state.refMax < 20 ? 'warn' : 'bad';
+        $('refMaxOld').className = state.refMaxOld < 5 ? 'ok' : state.refMaxOld < 20 ? 'warn' : 'bad';
     }
 
     requestAnimationFrame(render);
@@ -225,7 +251,10 @@ $('permBtn').addEventListener('click', async () => {
 
 $('lockBtn').addEventListener('click', () => {
     state.ref = state.heading;
+    state.refOld = state.matrix;
     state.refMax = 0;
+    state.refMaxOld = 0;
+    state.trace = [];
 });
 
 $('markBtn').addEventListener('click', () => {
@@ -257,7 +286,10 @@ $('markBtn').addEventListener('click', () => {
 
 $('exportBtn').addEventListener('click', () => {
     const blob = new Blob([JSON.stringify({
-        userAgent: navigator.userAgent, isIOS, marks: state.marks
+        userAgent: navigator.userAgent, isIOS,
+        marks: state.marks,
+        test1: { referans: state.ref, enBuyukSapmaYeni: state.refMax,
+                 enBuyukSapmaEski: state.refMaxOld, iz: state.trace }
     }, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);

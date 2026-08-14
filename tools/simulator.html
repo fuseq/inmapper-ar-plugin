@@ -34,8 +34,13 @@
         background: #238636; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
     }
     button.secondary { background: #21262d; border: 1px solid #30363d; }
-    .scene { flex: 1; display: flex; align-items: center; justify-content: center; }
-    canvas { background: #0d1117; }
+    /* AR katmanı tam ekran ve fixed; harita onun üstünde kalmalı */
+    .scene {
+        position: fixed; right: 48px; top: 50%; transform: translateY(-50%);
+        z-index: 99998; border: 1px solid #30363d; border-radius: 12px;
+        padding: 8px; background: rgba(13,17,23,.85); backdrop-filter: blur(4px);
+    }
+    canvas { display: block; }
     .hintbox { font-size: 11px; color: #6e7681; line-height: 1.6; margin-top: 14px; }
 </style>
 </head>
@@ -47,7 +52,7 @@
         mantığını ve filtreyi test eder. Kaydırıcılar sanal telefonu döndürür.</p>
 
     <h2>Sanal telefon</h2>
-    <label>Azimut (alpha) <span class="val" id="vAlpha">0°</span></label>
+    <label>Baktığı yön <span class="val" id="vAlpha">0°</span></label>
     <input type="range" id="alpha" min="0" max="359" value="0">
 
     <label>Eğim (beta) <span class="val" id="vBeta">90°</span></label>
@@ -61,6 +66,13 @@
 
     <label>Örnekleme hızı <span class="val" id="vHz">30 Hz</span></label>
     <input type="range" id="hz" min="5" max="60" value="30">
+
+    <h2>Kapalı mekan koşulları</h2>
+    <label>Manyetik bozulma <span class="val" id="vDistort">0°</span></label>
+    <input type="range" id="distort" min="0" max="90" value="0">
+
+    <label>Jiroskop kayması <span class="val" id="vDrift">0°/dk</span></label>
+    <input type="range" id="drift" min="0" max="30" value="0">
 
     <h2>Hedef</h2>
     <label>Harita açısı <span class="val" id="vTarget">45°</span></label>
@@ -77,14 +89,29 @@
     <div class="stat"><span>Fark</span><span id="sDelta">–</span></div>
     <div class="stat"><span>Hizalı</span><span id="sAligned">–</span></div>
     <div class="stat"><span>Kalibrasyon</span><span id="sCalib">–</span></div>
+    <div class="stat"><span>Üretilen ham veri</span><span id="sBase">–</span></div>
+    <div class="stat"><span>Oturum</span><span id="sDone">–</span></div>
+    <div class="stat"><span>Çerçeve</span><span id="sFrame">–</span></div>
+    <div class="stat"><span>Gerçek yön</span><span id="sTruth">–</span></div>
+    <div class="stat"><span>Heading hatası</span><span id="sErr">–</span></div>
 
     <button id="startBtn">AR Katmanını Başlat</button>
+    <button id="anchorBtn" class="secondary">Çapayı Kur</button>
     <button id="spinBtn" class="secondary">Otomatik Döndür</button>
 
     <p class="hintbox">
-        Denenecekler: eğimi 0'a getirin (kamera zemine bakar) — güven düşer,
-        heading donar ve ipucu çıkar. Gürültüyü artırıp eğimi 90'da tutun —
-        heading kararlı kalmalı. Yatırmayı ±90 yapın — heading değişmemeli.
+        Kaydırıcı kameranın baktığı yönü verir; ham alpha/beta/gamma üçlüsü
+        buna göre üretilir. Eğim ve yatırmayı değiştirdiğinizde plugin aynı
+        heading'i geri okumalı — okuyorsa matematik ekran yönünden bağımsız
+        demektir. Eğim ve yatırmayı birlikte 0'a getirin: kamera zemine bakar,
+        güven çöker, heading donar ve ipucu çıkar.
+    </p>
+    <p class="hintbox">
+        Çapayı denemek için manyetik bozulmayı sonuna kadar açın: heading
+        hatası büyür ve ok sallanır. Sonra "Çapayı Kur"a basın — heading
+        jiroskoptan üretilmeye başlar, bozulma sürse bile hata sıfıra iner.
+        Jiroskop kaymasını açarsanız hatanın zamanla yavaşça büyüdüğünü
+        görürsünüz; gerçek cihazda da çapanın tek zayıf noktası budur.
     </p>
 </div>
 
@@ -96,7 +123,8 @@
 const $ = (id) => document.getElementById(id);
 const ctl = {
     alpha: $('alpha'), beta: $('beta'), gamma: $('gamma'),
-    noise: $('noise'), hz: $('hz'), target: $('target'), offset: $('offset')
+    noise: $('noise'), hz: $('hz'), target: $('target'), offset: $('offset'),
+    distort: $('distort'), drift: $('drift')
 };
 
 let nav = null;
@@ -106,14 +134,45 @@ let timer = null;
 function noiseAmt() { return ctl.noise.value / 10; }
 function jitter() { return (Math.random() - 0.5) * noiseAmt(); }
 
-// Sentetik deviceorientationabsolute olayı üret
+// Sentetik deviceorientationabsolute olayı üret.
+// Kaydırıcı kameranın gerçekte baktığı yönü ifade eder. Alpha en dıştaki
+// dönüş olduğu için heading'i birebir -alpha kadar kaydırır; bu sayede
+// istenen yönü veren alpha, herhangi bir beta/gamma için tek adımda çözülür.
+// Jiroskopun keyfi referansı — gerçek cihazda da oturum başında rastgeledir
+const REL_REFERENCE = 137;
+let gyroDriftDeg = 0;
+
 function emit() {
+    const beta  = Number(ctl.beta.value);
+    const gamma = Number(ctl.gamma.value);
+    const want  = Number(ctl.alpha.value);
+
+    const base = ARNavigationUI._computeHeadingFromRotationMatrix(0, beta, gamma);
+    const alpha = ((base.heading - want) % 360 + 360) % 360;
+
+    // ── Manyetik akış ──
+    // Kapalı mekan bozulması yalnızca buraya bulaşır; jiroskop temiz kalır.
+    const distortion = Number(ctl.distort.value);
     const e = new Event('deviceorientationabsolute');
     e.absolute = true;
-    e.alpha = (Number(ctl.alpha.value) + jitter() + 360) % 360;
-    e.beta  = Number(ctl.beta.value) + jitter();
-    e.gamma = Number(ctl.gamma.value) + jitter();
+    e.alpha = (alpha + jitter() + distortion * Math.sin(Date.now() / 900) + 360) % 360;
+    e.beta  = beta + jitter();
+    e.gamma = gamma + jitter();
     window.dispatchEvent(e);
+
+    // ── Göreli (jiroskop) akış ──
+    // Keyfi referansa göre yaw, artı yavaş kayma. Manyetik bozulma yok.
+    gyroDriftDeg += Number(ctl.drift.value) / 60 / Number(ctl.hz.value);
+    const rel = new Event('deviceorientation');
+    rel.absolute = false;
+    rel.alpha = ((alpha + REL_REFERENCE + gyroDriftDeg) % 360 + 360) % 360;
+    rel.beta  = beta + jitter();
+    rel.gamma = gamma + jitter();
+    window.dispatchEvent(rel);
+
+    $('sBase').textContent = base.confidence < 0.02
+        ? 'tanımsız (kamera dikey)'
+        : `α ${alpha.toFixed(0)}° / β ${beta}° / γ ${gamma}°`;
 }
 
 function restartTimer() {
@@ -135,6 +194,8 @@ function refresh() {
     $('vHz').textContent    = ctl.hz.value + ' Hz';
     $('vTarget').textContent = ctl.target.value + '°';
     $('vOffset').textContent = ctl.offset.value + '°';
+    $('vDistort').textContent = ctl.distort.value + '°';
+    $('vDrift').textContent = ctl.drift.value + '°/dk';
 
     if (nav) {
         nav.targetAngle = Number(ctl.target.value);
@@ -147,12 +208,23 @@ function refresh() {
         $('sHeading').textContent = h.toFixed(1) + '°';
         $('sConf').textContent = conf.toFixed(2);
         $('sConf').className = conf > 0.4 ? 'ok' : conf > 0.15 ? 'warn' : 'bad';
-        $('sSource').textContent = nav.compassSource;
+        $('sSource').textContent = nav.isAnchored ? 'çapa (jiroskop)' : nav.compassSource;
         $('sTarget').textContent = t.toFixed(1) + '°';
         $('sDelta').textContent = delta.toFixed(1) + '°';
         $('sAligned').textContent = nav.isAligned ? 'evet' : 'hayır';
         $('sAligned').className = nav.isAligned ? 'ok' : '';
         $('sCalib').textContent = nav.calibrationQuality;
+
+        // Çapa kuruluyken heading harita çerçevesinde, aksi halde manyetik.
+        // Gerçek yön kaydırıcının kendisi olduğu için hata doğrudan ölçülebilir.
+        const truth = Number(ctl.alpha.value);
+        const shown = nav.isAnchored ? h : h - Number(ctl.offset.value);
+        const err = Math.abs(((shown - truth + 180) % 360 + 360) % 360 - 180);
+        $('sFrame').textContent = nav.isAnchored ? 'harita (çapa)' : 'manyetik';
+        $('sFrame').className = nav.isAnchored ? 'ok' : '';
+        $('sTruth').textContent = truth.toFixed(0) + '°';
+        $('sErr').textContent = err.toFixed(1) + '°';
+        $('sErr').className = err < 5 ? 'ok' : err < 15 ? 'warn' : 'bad';
     }
     draw();
 }
@@ -191,18 +263,59 @@ function draw() {
     arrow(nav.currentHeading, '#58a6ff', R - 45, 6);    // cihaz
 }
 
-$('startBtn').addEventListener('click', () => {
-    if (nav) { nav.destroy(); nav = null; $('startBtn').textContent = 'AR Katmanını Başlat'; return; }
+function startNav() {
     nav = new ARNavigationUI({
         targetAngle: Number(ctl.target.value),
         mapNorthOffset: Number(ctl.offset.value),
         tolerance: 12,
         manageCamera: false,      // masaüstünde kamera yok
         showDebugPanel: true,
-        showPopup: false
+        showPopup: false,
+        // Hizalanma progressDuration boyunca korununca oturum biter. Test
+        // aracında bu her seferinde donmaya yol açacağı için yeniden kurulur.
+        onCompleted: () => {
+            $('sDone').textContent = 'tamamlandı, yeniden kuruluyor';
+            // Çapa oturuma bağlıdır ve yeni oturumda düşer; test akışı
+            // kopmasın diye aynı yönle tekrar kurulur.
+            const anchored = nav.isAnchored ? nav._anchor.mapHeading : null;
+            setTimeout(() => {
+                if (!nav) return;
+                nav.destroy();
+                startNav();
+                if (anchored !== null) {
+                    setTimeout(() => nav && nav.setAnchor(anchored), 120);
+                }
+                $('sDone').textContent = 'takip ediyor';
+            }, 1200);
+        }
     });
     nav.start();
     $('startBtn').textContent = 'Durdur';
+}
+
+$('startBtn').addEventListener('click', () => {
+    if (nav) {
+        nav.destroy(); nav = null;
+        $('startBtn').textContent = 'AR Katmanını Başlat';
+        $('sDone').textContent = '–';
+        return;
+    }
+    startNav();
+    $('sDone').textContent = 'takip ediyor';
+});
+
+// Kullanıcı bilinen bir yöne (kapı normali / koridorun ilk bacağı) hizalanıp
+// çapayı kurar. Simülatörde bilinen yön kaydırıcının kendisidir.
+$('anchorBtn').addEventListener('click', () => {
+    if (!nav) return;
+    if (nav.isAnchored) {
+        nav.clearAnchor();
+        $('anchorBtn').textContent = 'Çapayı Kur';
+        return;
+    }
+    if (nav.setAnchor(Number(ctl.alpha.value))) {
+        $('anchorBtn').textContent = 'Çapayı Kaldır';
+    }
 });
 
 $('spinBtn').addEventListener('click', () => {

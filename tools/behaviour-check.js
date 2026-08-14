@@ -49,7 +49,15 @@ global.document = {
     head: makeElement(),
     body: makeElement()
 };
-global.window = { addEventListener() {}, removeEventListener() {} };
+// DeviceOrientationEvent'in yalnizca varligi kontrol ediliyor; iOS'a ozgu
+// requestPermission ve webkitCompassHeading bilerek yok, boylece test ortami
+// Android benzeri davranir.
+function DeviceOrientationEventStub() {}
+global.DeviceOrientationEvent = DeviceOrientationEventStub;
+global.window = {
+    addEventListener() {}, removeEventListener() {},
+    DeviceOrientationEvent: DeviceOrientationEventStub
+};
 global.getComputedStyle = () => ({ strokeDashoffset: '283' });
 global.requestAnimationFrame = () => 0;
 global.cancelAnimationFrame = () => {};
@@ -294,6 +302,210 @@ section('8. ARDirectionCalculator: yon, duzluk ve kose tespiti');
     check('eski kiris yontemi kosede yaniltici olurdu (45 derece)',
         angDiff(chord, 45) < 1e-9 && angDiff(corner.compassAngle, chord) > 40,
         'kiris ' + chord.toFixed(1) + ' vs yeni ' + corner.compassAngle.toFixed(1));
+}
+
+// ────────────────────────────────────────────────────────────
+section('9. Esik civarinda salinan iOS dogrulugu durumu titretmiyor');
+// ────────────────────────────────────────────────────────────
+{
+    // Saha olcumu: saglikli iPhone acik havada surekli ~12 bildiriyor ve
+    // o anda gercek hata 1.3 derece. Bu deger FAIR sayilmamali.
+    const nav = makeNav({ targetAngle: 0 });
+    let degraded = 0, improved = 0;
+    nav.onCalibrationNeeded = () => degraded++;
+    nav.onCalibrationImproved = () => improved++;
+
+    const still = [];
+    for (let i = 0; i < 40; i++) still.push(70 + Math.sin(i) * 0.5);
+
+    // accuracy 11.9 ile 12.3 arasinda salinirken 10 degerlendirme turu
+    for (let round = 0; round < 10; round++) {
+        nav._recordIOSAccuracy(round % 2 === 0 ? 11.9 : 12.3);
+        feed(nav, still, 15);
+        clock += 2500;
+        feed(nav, still, 15);
+    }
+
+    check('normal iPhone dogrulugu (~12) GOOD sayiliyor',
+        nav.calibrationQuality === 'good', 'quality: ' + nav.calibrationQuality);
+    check('esik civarinda salinim uyari yagmuru uretmiyor',
+        degraded === 0, 'degraded cagrisi: ' + degraded);
+
+    // Gercekten bozuk sensor hala yakalanmali
+    const bad = makeNav({ targetAngle: 0 });
+    let badDegraded = 0;
+    bad.onCalibrationNeeded = () => badDegraded++;
+    for (let round = 0; round < 6; round++) {
+        bad._recordIOSAccuracy(-1);   // negatif = kalibre degil
+        feed(bad, still, 15);
+        clock += 2500;
+        feed(bad, still, 15);
+    }
+    check('kalibre olmamis sensor POOR olarak bildiriliyor',
+        bad.calibrationQuality === 'poor', 'quality: ' + bad.calibrationQuality);
+    check('gercek bozulma kullaniciya haber veriliyor', badDegraded > 0,
+        'degraded cagrisi: ' + badDegraded);
+}
+
+// ────────────────────────────────────────────────────────────
+section('10. Jiroskop capasi');
+// ────────────────────────────────────────────────────────────
+{
+    // Goreli akisi taklit et: capa kurulmadan once referans olusmali
+    function feedRelative(nav, alpha, beta = 90, gamma = 0) {
+        clock += 33;
+        nav._relOrient({ absolute: false, alpha, beta, gamma });
+    }
+
+    // Capa kurulmadan once
+    {
+        const nav = makeNav({ targetAngle: 0 });
+        nav._startCompass();
+        check('goreli akis gelmeden capa kurulamaz', nav.setAnchor(90) === false);
+        check('capa yokken cerceve manyetik', nav.headingFrame === 'magnetic');
+    }
+
+    // Capa kurulumu ve takip
+    {
+        const nav = makeNav({ targetAngle: 40 });
+        nav._startCompass();
+
+        // Cihaz keyfi bir goreli yonde duruyor
+        feedRelative(nav, 200);
+        check('goreli akis hazir', nav.canAnchor === true);
+
+        // Kullanici kapinin baktigi yone (harita cercevesinde 40) hizalanip capayi kurar
+        check('capa kuruldu', nav.setAnchor(40) === true);
+        check('capa sonrasi cerceve harita', nav.headingFrame === 'map');
+        check('capa aninda heading tam hedef',
+            angDiff(nav.currentHeading, 40) < 1e-9, 'heading ' + nav.currentHeading);
+        check('capa kuruluyken hizali', nav.isAligned === true);
+
+        // Cihaz 30 derece saga doner -> goreli alpha ters yonde artar.
+        // Donus bitince filtrenin oturmasi icin birkac ornek daha beslenir;
+        // aksi halde olculen fark sensorun degil yumusatma gecikmesinin olur.
+        for (let i = 0; i < 30; i++) feedRelative(nav, 200 - (i + 1));
+        for (let i = 0; i < 10; i++) feedRelative(nav, 170);
+        check('jiroskop donusu harita cercevesinde takip ediliyor',
+            angDiff(nav.currentHeading, 70) < 0.5, 'heading ' + nav.currentHeading);
+
+        // Geri donunce eski degere oturmali
+        for (let i = 29; i >= 0; i--) feedRelative(nav, 200 - i);
+        for (let i = 0; i < 10; i++) feedRelative(nav, 200);
+        check('geri donuste heading geri geliyor',
+            angDiff(nav.currentHeading, 40) < 0.5, 'heading ' + nav.currentHeading);
+    }
+
+    // Pusula yeniden baslatilinca capa gecersiz olmali
+    {
+        const nav = makeNav({ targetAngle: 0 });
+        nav._startCompass();
+        feedRelative(nav, 50);
+        nav.setAnchor(0);
+        check('capa kurulu', nav.isAnchored === true);
+
+        nav._stopCompass();
+        check('pusula durunca capa dusuyor', nav.isAnchored === false);
+
+        // Jiroskopun keyfi referansi degismis olabilir; eski offset kullanilmamali
+        nav._startCompass();
+        feedRelative(nav, 300);
+        check('yeniden baslatmada cerceve manyetige donuyor',
+            nav.headingFrame === 'magnetic');
+    }
+
+    // Manyetik bozulma capayi etkilememeli
+    {
+        const nav = makeNav({ targetAngle: 0 });
+        nav._startCompass();
+        feedRelative(nav, 100);
+        nav.setAnchor(0);
+
+        // Pusula tamamen sacmaliyor (kapali mekan celik yapi)
+        for (let i = 0; i < 50; i++) {
+            clock += 33;
+            nav._handleCompass((i * 37) % 360, 90, 1);
+        }
+        check('manyetik bozulma capali heading i kaydirmiyor',
+            angDiff(nav.currentHeading, 0) < 1e-9, 'heading ' + nav.currentHeading);
+    }
+
+    // Cerceve ayrimi: capa varken offsetler uygulanmamali
+    {
+        const nav = makeNav({ targetAngle: 10, mapNorthOffset: 30, magneticDeclination: 6 });
+        check('capa yokken hedef manyetik cerceveye tasiniyor',
+            Math.abs(nav.effectiveTargetAngle - 34) < 1e-9, 'gelen ' + nav.effectiveTargetAngle);
+
+        nav._startCompass();
+        feedRelative(nav, 0);
+        nav.setAnchor(0);
+        check('capa varken hedef ham harita acisi kaliyor',
+            Math.abs(nav.effectiveTargetAngle - 10) < 1e-9, 'gelen ' + nav.effectiveTargetAngle);
+
+        nav.clearAnchor();
+        check('capa kaldirilinca offsetler geri geliyor',
+            Math.abs(nav.effectiveTargetAngle - 34) < 1e-9, 'gelen ' + nav.effectiveTargetAngle);
+    }
+
+    // Kayma duzeltmesi: varsayilan kapali, acikken sinirli hizda
+    {
+        const nav = makeNav({ targetAngle: 0 });
+        nav._startCompass();
+        feedRelative(nav, 0);
+        nav.setAnchor(0);
+        const before = nav._anchor.offset;
+        for (let i = 0; i < 100; i++) {
+            clock += 33;
+            nav._handleCompass(90, 90, 1);
+        }
+        check('kayma duzeltmesi varsayilan kapali',
+            Math.abs(nav._anchor.offset - before) < 1e-9);
+
+        const nav2 = makeNav({ targetAngle: 0, anchorDriftCorrection: true, anchorDriftRateDps: 1 });
+        nav2._startCompass();
+        feedRelative(nav2, 0);
+        nav2.setAnchor(0);
+        nav2._calibration.quality = 'good';
+        const start = clock;
+        for (let i = 0; i < 100; i++) {
+            clock += 33;
+            nav2._handleCompass(90, 90, 1);
+        }
+        const elapsedSec = (clock - start) / 1000;
+        const moved = Math.abs(((nav2._anchor.offset + 180) % 360 + 360) % 360 - 180);
+        check('kayma duzeltmesi acikken calisiyor', moved > 0.5, 'kayma ' + moved.toFixed(2));
+        check('kayma duzeltmesi hiz sinirini asmiyor',
+            moved <= elapsedSec * 1 + 1e-6,
+            'kayma ' + moved.toFixed(2) + ' vs limit ' + elapsedSec.toFixed(2));
+    }
+}
+
+// ────────────────────────────────────────────────────────────
+section('11. Kapi cizgisinden capa acisi');
+// ────────────────────────────────────────────────────────────
+{
+    const ARDirectionCalculator = require('../ar-direction.js');
+
+    // Yatay kapi cizgisi; koridor yukarida (SVG de y kucuk = yukari = kuzey)
+    const door = { x1: 0, y1: 100, x2: 50, y2: 100 };
+    check('kapi normali koridora dogru bakiyor (kuzey)',
+        angDiff(ARDirectionCalculator.doorFacing(door, [25, 0]), 0) < 1e-9,
+        'gelen ' + ARDirectionCalculator.doorFacing(door, [25, 0]));
+    check('koridor diger tarafta ise normal ters cevriliyor (guney)',
+        angDiff(ARDirectionCalculator.doorFacing(door, [25, 200]), 180) < 1e-9,
+        'gelen ' + ARDirectionCalculator.doorFacing(door, [25, 200]));
+
+    // Dikey kapi cizgisi; koridor sagda = dogu
+    const vertical = { x1: 100, y1: 0, x2: 100, y2: 50 };
+    check('dikey kapida normal dogu',
+        angDiff(ARDirectionCalculator.doorFacing(vertical, [200, 25]), 90) < 1e-9,
+        'gelen ' + ARDirectionCalculator.doorFacing(vertical, [200, 25]));
+
+    // Dejenere durumlar
+    check('sifir uzunluklu kapi null donuyor',
+        ARDirectionCalculator.doorFacing({ x1: 5, y1: 5, x2: 5, y2: 5 }, [10, 10]) === null);
+    check('nokta kapi cizgisi uzerindeyse null donuyor',
+        ARDirectionCalculator.doorFacing(door, [10, 100]) === null);
 }
 
 // ────────────────────────────────────────────────────────────

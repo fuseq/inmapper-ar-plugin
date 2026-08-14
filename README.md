@@ -86,8 +86,45 @@ raporlanmıştır. Manyetik kuzeye dayanan herhangi bir pusula bazı koridorlard
 yanlış yön gösterecektir; bu bir yazılım hatası değil, yöntemin sınırıdır.
 
 Bileşen bunu gizlemez: kalibrasyon kalitesi izlenir ve `onCalibrationNeeded`
-ile bildirilir. Kalıcı çözüm için jiroskop tabanlı göreli takip ve bilinen bir
-referansa çapalama gerekir (kapı yönü, QR, veya konum akışı).
+ile bildirilir. Kalıcı çözüm ise aşağıdaki jiroskop çapasıdır.
+
+## Jiroskop çapası
+
+Çapa modunda yön manyetometreden değil jiroskoptan üretilir. Kullanıcı bilinen
+bir yöne bir kez hizalanır, o andan itibaren dönüşler jiroskopla takip edilir ve
+manyetik bozulma yönü hiç etkilemez.
+
+```js
+const facing = ARDirectionCalculator.doorFacing(door, firstPathPoint);
+nav.setAnchor(facing);   // "kamera şu anda haritada bu yöne bakıyor"
+```
+
+Çapa açısı harita çerçevesinde verilir. En doğal kaynak kapının baktığı yöndür:
+SVG'de kapılar nokta değil çizgi segmentidir, dolayısıyla bir normalleri vardır.
+`doorFacing` bu normali hesaplar ve iki aday yönden hangisinin koridora baktığını
+verdiğiniz noktaya (tipik olarak güzergâhın kapıdan sonraki ilk noktası) göre
+seçer. Kullanıcı kapıdan çıkarken zaten o yöne bakar, dolayısıyla ek bir
+hizalama adımı gerekmez. Alternatif olarak güzergâhın ilk bacağının yönü
+(`calculate().compassAngle`) da kullanılabilir.
+
+Çapa kurulduğunda `currentHeading` harita çerçevesine geçer ve `mapNorthOffset`
+ile `magneticDeclination` **devre dışı kalır** — çapa harita ile cihaz
+arasındaki ilişkiyi doğrudan kurduğu için bu offsetler ikinci kez uygulanırsa
+açı iki kez kayar. Hangi çerçevede olduğunuzu `headingFrame` söyler
+(`'magnetic'` veya `'map'`).
+
+Çapanın tek zayıf noktası jiroskop kaymasıdır; telefon sınıfı sensörlerde
+dakikada birkaç derece mertebesindedir ve tipik bir navigasyon süresinde
+önemsizdir. Uzun oturumlar için `anchorDriftCorrection` açılabilir: kalibrasyon
+iyiyken manyetik okuma çapayı saniyede en fazla `anchorDriftRateDps` kadar geri
+çeker. Bu düzeltme manyetik okumayı harita çerçevesine taşımak için
+`mapNorthOffset`'e ihtiyaç duyar; mekan offset'i ölçülmeden açılırsa çapayı
+doğrudan yanlışa çeker, bu yüzden varsayılan kapalıdır.
+
+Çapa oturuma bağlıdır. Pusula durdurulup yeniden başlatıldığında jiroskobun
+keyfi referansı değişebileceği için çapa otomatik olarak düşer ve çerçeve
+manyetiğe döner; sessizce yanlış yön göstermek yerine yeniden kurulması beklenir.
+Çapa kurulabilir durumda mı, `canAnchor` ile öğrenilir.
 
 ## Seçenekler
 
@@ -102,6 +139,13 @@ referansa çapalama gerekir (kapı yönü, QR, veya konum akışı).
 | `showDebugPanel` | `false` | Alt köşede tanılama paneli |
 | `calibrationCheck` | `true` | Kalibrasyon kalitesi izlensin mi |
 | `arrowImages` | `null` | Özel ok görselleri; verilmezse gömülü SVG kullanılır |
+| `anchorDriftCorrection` | `false` | Çapa kaymasını pusulayla geri çek (mapNorthOffset gerektirir) |
+| `anchorDriftRateDps` | `0.5` | Kayma düzeltmesinin üst hızı (derece/saniye) |
+
+Metotlar: `start`, `stop`, `destroy`, `setAnchor`, `clearAnchor`.
+Okunabilir alanlar: `isRunning`, `isAligned`, `currentHeading`,
+`currentConfidence`, `effectiveTargetAngle`, `compassSource`,
+`calibrationQuality`, `isAnchored`, `headingFrame`, `canAnchor`.
 
 Geri çağrılar: `onStart`, `onStop`, `onCompleted`, `onPopupDismiss`,
 `onCompassUpdate`, `onAligned`, `onMisaligned`, `onError`,
@@ -116,11 +160,22 @@ Bileşen mevcut en güvenilir kaynağı seçer ve tek bir matematikte birleştir
 |---|---|---|
 | `AbsoluteOrientationSensor` | Chrome/Android | Quaternion tabanlı, tercih edilen |
 | `deviceorientationabsolute` | Chrome/Android | Sensor API devralınca kapatılır |
-| `webkitCompassHeading` | iOS Safari | `alpha = 360 − heading` ile normalize edilir |
+| `webkitCompassHeading` | iOS Safari | Doğrudan kamera yönü olarak kullanılır |
 | `deviceorientation` (fallback) | Android | Son çare; **iOS'ta kullanılmaz** |
 
 iOS'ta `alpha` mutlak değildir (Apple: "keyfi bir yönden ölçülen offset"), bu
 yüzden orada fallback'e düşmek yerine hata bildirilir.
+
+`webkitCompassHeading` CoreLocation'ın attitude çözümünden gelir ve zaten
+kameranın baktığı yönü verir; yatırmadan (`gamma`) etkilenmez. Bu değeri
+`alpha = 360 − heading` ile mutlak alpha'ya çevirip rotasyon matrisinden
+geçirmek matematiksel olarak yanlıştır: matris `gamma`'yı ikinci kez uygular ve
+heading'e tam `gamma` kadar hata ekler. iPhone'da ölçüldü — telefon dik ve düz
+tutulduğunda hata sıfır, yana yatırıldıkça büyüyor, yatay moda geçince 90°'ye
+yaklaşıyor. Doğrulama: `node tools/ios-model-check.js`.
+
+Matristen yalnızca güven metriği alınır. Yatay izdüşümün büyüklüğü `alpha`'dan
+bağımsız olduğu için bu hesap `alpha = 0` ile yapılır ve sonuç tam doğrudur.
 
 `Magnetometer` API'si hiçbir tarayıcıda varsayılan olarak açık olmadığı için
 kullanılmaz; iOS'ta bunun yerine `webkitCompassAccuracy` okunur.
@@ -130,6 +185,7 @@ kullanılmaz; iOS'ta bunun yerine `webkitCompassAccuracy` okunur.
 ```bash
 node tools/behaviour-check.js     # davranış regresyon testleri
 node tools/compass-math-check.js  # pusula matematiği doğrulama raporu
+node tools/ios-model-check.js     # iOS heading modeli, saha ölçümüne karşı
 ```
 
 `behaviour-check.js` minimal bir DOM taklidi ve kontrol edilebilir bir saat

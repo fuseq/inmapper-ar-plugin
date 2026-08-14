@@ -104,8 +104,16 @@ class ARNavigationUI {
         JUMP_RATE_FAIR: 0.15,        // > %15 sıçrama oranı → FAIR
 
         // iOS webkitCompassAccuracy (±derece). Negatif = kalibre değil.
-        IOS_ACCURACY_POOR: 25,
-        IOS_ACCURACY_FAIR: 12,
+        // Saha ölçümü (iPhone, iOS 26.6): sağlıklı bir cihaz açık havada sürekli
+        // ~12 bildiriyor ve o anda gerçek hata yalnızca 1.3°. Eşik 12 iken cihaz
+        // normal çalışırken FAIR damgası yiyor ve iki saniyede bir GOOD/FAIR
+        // arasında gidip gelerek uyarıları tekrar tekrar tetikliyordu.
+        IOS_ACCURACY_POOR: 35,
+        IOS_ACCURACY_FAIR: 20,
+
+        // Kalite değişimi bu kadar arka arkaya doğrulanmadan kabul edilmez.
+        // Metrikler eşiğin tam üstünde salındığında durumun titremesini önler.
+        QUALITY_CONFIRM: 2,
     };
 
     static STYLES = `
@@ -462,6 +470,15 @@ class ARNavigationUI {
         this.manageCamera = options.manageCamera !== false;
         this.arrowImages = options.arrowImages ?? null;
 
+        // ── Jiroskop çapası ──
+        // Kapalı mekanda manyetik alan çelik yapı ve elektronik yüzünden bozuktur;
+        // pusula tek başına onlarca derece sapabilir. Çapa modunda bilinen bir
+        // yöne bir kez hizalanılır ve sonrası jiroskopla takip edilir.
+        // Kayma düzeltmesi manyetik okumayla yavaşça geri çeker; ancak bu ancak
+        // mapNorthOffset ölçülmüşse anlamlıdır, o yüzden varsayılan kapalı.
+        this.anchorDriftCorrection = options.anchorDriftCorrection === true;
+        this.anchorDriftRateDps = options.anchorDriftRateDps ?? 0.5;
+
         // Kalibrasyon konfigürasyonu
         this.calibrationCheck = options.calibrationCheck !== false;
 
@@ -505,6 +522,21 @@ class ARNavigationUI {
         this._lastSampleTime = 0;
         this._jumpRejectMs = 0;
 
+        // ── Göreli yönelim (jiroskop) durumu ──
+        // Manyetometreden bağımsız akış. Çapa kurulana kadar yalnızca izlenir,
+        // kurulduktan sonra heading'i süren kaynak bu olur.
+        this._relOrient = null;
+        this._relHeading = null;
+        this._relConfidence = 0;
+        this._relReady = false;
+        this._anchor = {
+            active: false,
+            mapHeading: 0,   // Çapa anında kameranın baktığı harita açısı
+            offset: 0,       // harita heading'i = göreli heading + offset
+            setAt: 0,
+            lastDriftAt: 0
+        };
+
         // Pusula kaynak takibi
         // 'none' | 'absolute-event' | 'webkit-compass' | 'absolute-flag' | 'sensor-api'
         this._compassSource = 'none';
@@ -519,6 +551,8 @@ class ARNavigationUI {
             jumpFlags: [],          // Son N örnek için sıçrama bayrağı (kayan pencere)
             lastCheckTime: 0,       // Son kalibrasyon kontrolü zamanı
             iosAccuracy: null,      // webkitCompassAccuracy (±derece, iOS'a özel)
+            pendingQuality: null,   // Doğrulanmayı bekleyen kalite adayı
+            pendingCount: 0,        // Adayın üst üste kaç kez görüldüğü
         };
 
         // Başlat
@@ -542,15 +576,90 @@ class ARNavigationUI {
     /** Mevcut okumanın güvenilirliği (0-1); kamera ufka yaklaştıkça 1'e gider */
     get currentConfidence() { return this._currentConfidence; }
 
+    /** Çapa kurulu mu (jiroskop takibi aktif mi) */
+    get isAnchored() { return this._anchor.active; }
+
     /**
-     * Hedef açının cihaz pusulasıyla karşılaştırılabilir hali.
+     * currentHeading hangi çerçevede ölçülüyor.
+     * 'magnetic' → manyetik kuzey referanslı (pusula)
+     * 'map'      → harita çerçevesi (çapa kurulu, jiroskop takibi)
+     */
+    get headingFrame() { return this._anchor.active ? 'map' : 'magnetic'; }
+
+    /** Göreli yönelim akışı çalışıyor mu (çapa kurulabilir mi) */
+    get canAnchor() { return this._relReady; }
+
+    /**
+     * Hedef açının currentHeading ile karşılaştırılabilir hali.
      *
-     * targetAngle harita çerçevesindedir; cihaz ise manyetik kuzeyi ölçer.
-     * Zincir: harita açısı → (mapNorthOffset) → gerçek kuzey → (−declination)
-     * → manyetik kuzey.
+     * targetAngle daima harita çerçevesindedir. Çapa kuruluyken currentHeading
+     * de harita çerçevesindedir, dolayısıyla dönüşüme gerek yoktur; offset yine
+     * de uygulanırsa açı iki kez kaydırılır. Çapa yokken cihaz manyetik kuzeyi
+     * ölçer ve zincir şudur:
+     * harita açısı → (mapNorthOffset) → gerçek kuzey → (−declination) → manyetik.
      */
     get effectiveTargetAngle() {
-        return ((this.targetAngle + this.mapNorthOffset - this.magneticDeclination) % 360 + 360) % 360;
+        if (this._anchor.active) {
+            return ARNavigationUI._norm360(this.targetAngle);
+        }
+        return ARNavigationUI._norm360(
+            this.targetAngle + this.mapNorthOffset - this.magneticDeclination
+        );
+    }
+
+    /**
+     * Jiroskop çapasını kurar.
+     *
+     * Kullanıcı bilinen bir yöne (tipik olarak çıktığı kapının baktığı yön veya
+     * güzergâhın ilk bacağı) fiziksel olarak hizalanır ve bu çağrılır. O andan
+     * itibaren heading manyetometreden değil jiroskoptan üretilir; kapalı
+     * mekandaki manyetik bozulma yönü etkilemez.
+     *
+     * Çapa kurulduğunda currentHeading harita çerçevesine geçer, dolayısıyla
+     * mapNorthOffset ve magneticDeclination devre dışı kalır — çapa zaten
+     * harita ile cihaz arasındaki ilişkiyi doğrudan kurar.
+     *
+     * @param {number} mapHeading - Kameranın şu anda baktığı yön, harita
+     *                              çerçevesinde (SVG'de yukarı = 0°)
+     * @returns {boolean} Göreli yönelim akışı hazır değilse false
+     */
+    setAnchor(mapHeading) {
+        if (!this._relReady || this._relHeading === null) {
+            console.warn('ARNavigationUI: Jiroskop akışı hazır değil, çapa kurulamadı');
+            return false;
+        }
+
+        const target = ARNavigationUI._norm360(mapHeading);
+        this._anchor.active = true;
+        this._anchor.mapHeading = target;
+        this._anchor.offset = ARNavigationUI._norm360(target - this._relHeading);
+        this._anchor.setAt = Date.now();
+        this._anchor.lastDriftAt = Date.now();
+
+        // Çerçeve değiştiği için eski örnekler anlamsız; filtre sıfırlanmazsa
+        // heading iki çerçeve arasında yumuşayarak yanlış bir ara değere oturur.
+        this._headingBuffer = [];
+        this._lastRawHeading = null;
+        this._jumpRejectMs = 0;
+        this._currentHeading = target;
+
+        this._updateDebugPanel({ source: 'çapa (jiroskop)' });
+        this._updateArrows();
+        return true;
+    }
+
+    /** Çapayı kaldırır, heading tekrar manyetik pusuladan üretilir. */
+    clearAnchor() {
+        if (!this._anchor.active) return;
+        this._anchor.active = false;
+        this._headingBuffer = [];
+        this._lastRawHeading = null;
+        this._jumpRejectMs = 0;
+    }
+
+    /** Açıyı 0-360 aralığına indirger */
+    static _norm360(a) {
+        return ((a % 360) + 360) % 360;
     }
 
     /** Aktif pusula kaynağı ('absolute-event' | 'webkit-compass' | 'absolute-flag' | 'sensor-api' | 'fallback-rotation' | 'none') */
@@ -965,16 +1074,24 @@ class ARNavigationUI {
             if (this._hasAbsoluteSource) return;
 
             // ── iOS: webkitCompassHeading ──
-            // Bu değer kamera yönü DEĞİL, alpha ile aynı ailedendir: dünya
-            // dikey ekseni etrafındaki azimut (alpha'nın tersi yönde artar).
-            // Doğrudan heading olarak kullanılırsa portrede doğru, yatay modda
-            // ~90° yanlış olur. Bu yüzden mutlak alpha'ya çevirip Android ile
-            // aynı rotasyon matrisinden geçiriyoruz.
+            // CoreLocation bu değeri cihazın attitude'undan üretir ve doğrudan
+            // kameranın baktığı yönü verir; yatırmadan (gamma) etkilenmez.
+            // alpha = 360 - webkitCompassHeading çevrimi yapıp matrise sokmak,
+            // matris gamma'yı ikinci kez uyguladığı için heading'e tam gamma
+            // kadar hata ekler (iPhone ölçümüyle doğrulandı: heading = wk - gamma).
+            // Bu yüzden değer olduğu gibi kullanılır.
             if (e.webkitCompassHeading != null && !isNaN(e.webkitCompassHeading)) {
                 this._compassSource = 'webkit-compass';
                 this._recordIOSAccuracy(e.webkitCompassAccuracy);
-                const alpha = (360 - e.webkitCompassHeading) % 360;
-                this._ingestOrientation(alpha, e.beta ?? 90, e.gamma ?? 0, 'webkit-compass');
+
+                const beta = e.beta ?? 90;
+                const gamma = e.gamma ?? 0;
+                // Yatay izdüşümün büyüklüğü alpha'dan bağımsızdır, bu yüzden
+                // güven metriği alpha=0 ile hesaplansa da tam doğrudur.
+                const { confidence } =
+                    ARNavigationUI._computeHeadingFromRotationMatrix(0, beta, gamma);
+
+                this._handleCompass(e.webkitCompassHeading, beta, confidence);
                 return;
             }
 
@@ -999,9 +1116,35 @@ class ARNavigationUI {
             }
         };
 
+        // ══════════════════════════════════════════════════════
+        //  GÖRELİ YÖNELİM: jiroskop çapası için
+        //  Manyetometre karışmayan akış. iOS'ta deviceorientation'ın alpha'sı
+        //  (CoreMotion, xArbitraryZVertical), Android'de göreli yönelim
+        //  sensörü aynı şeyi verir: keyfi bir referansa göre yaw.
+        //  Mutlak değer taşıyan eventler bu akışa alınmaz, yoksa çapanın
+        //  bağımsızlığı bozulur ve manyetik bozulma geri sızar.
+        // ══════════════════════════════════════════════════════
+        this._relOrient = (e) => {
+            if (e.absolute === true) return;
+            if (e.alpha == null || e.beta == null || e.gamma == null) return;
+
+            const { heading, confidence } =
+                ARNavigationUI._computeHeadingFromRotationMatrix(e.alpha, e.beta, e.gamma);
+
+            this._relHeading = heading;
+            this._relConfidence = confidence;
+            this._relReady = true;
+
+            if (!this._anchor.active) return;
+
+            const mapHeading = ARNavigationUI._norm360(heading + this._anchor.offset);
+            this._handleCompass(mapHeading, e.beta, confidence, 'anchored');
+        };
+
         const addListeners = () => {
             window.addEventListener('deviceorientationabsolute', this._compassAbs, true);
             window.addEventListener('deviceorientation', this._compassWk, true);
+            window.addEventListener('deviceorientation', this._relOrient, true);
             this._compassActive = true;
 
             // Kalibrasyon izlemeyi başlat
@@ -1123,6 +1266,10 @@ class ARNavigationUI {
             window.removeEventListener('deviceorientation', this._compassWk, true);
             this._compassWk = null;
         }
+        if (this._relOrient) {
+            window.removeEventListener('deviceorientation', this._relOrient, true);
+            this._relOrient = null;
+        }
         if (this._compassTimeout) {
             clearTimeout(this._compassTimeout);
             this._compassTimeout = null;
@@ -1137,6 +1284,14 @@ class ARNavigationUI {
         this._lastRawHeading = null;
         this._lastSampleTime = 0;
         this._jumpRejectMs = 0;
+        this._relReady = false;
+        this._relHeading = null;
+
+        // ── Çapa geçersiz kılınır ──
+        // Göreli akışın referansı keyfidir ve akış yeniden başladığında farklı
+        // olabilir. Eski offset korunursa çapa sessizce yanlış yönü gösterir;
+        // bu, kullanıcının fark edemeyeceği türden bir hata olurdu.
+        this._anchor.active = false;
 
         // Kalibrasyon izlemeyi durdur
         this._stopCalibrationMonitor();
@@ -1228,8 +1383,20 @@ class ARNavigationUI {
      * @param {number} rawHeading - Ham heading (0-360)
      * @param {number} beta       - Cihaz eğimi
      * @param {number} confidence - Okumanın güvenilirliği (0-1)
+     * @param {'magnetic'|'anchored'} [kind] - Okumanın hangi akıştan geldiği
      */
-    _handleCompass(rawHeading, beta, confidence = 1) {
+    _handleCompass(rawHeading, beta, confidence = 1, kind = 'magnetic') {
+        // ── Çapa kuruluyken manyetik okuma ekranı sürmez ──
+        // İki akış birden heading'i güncellerse çapa anlamını yitirir ve
+        // kapalı mekandaki manyetik bozulma geri sızar. Manyetik veri bu
+        // durumda yalnızca kalibrasyon ve kayma düzeltmesi için kullanılır.
+        if (this._anchor.active && kind === 'magnetic') {
+            this._observeMagneticWhileAnchored(rawHeading, confidence);
+            return;
+        }
+        // Çapa yokken göreli akış yalnızca referans olarak izlenir
+        if (!this._anchor.active && kind === 'anchored') return;
+
         const now = Date.now();
         const dtMs = this._lastSampleTime ? now - this._lastSampleTime : 0;
         this._lastSampleTime = now;
@@ -1289,17 +1456,63 @@ class ARNavigationUI {
                 confidence: confidence,
                 targetAngle: this.targetAngle,
                 effectiveTargetAngle: this.effectiveTargetAngle,
-                source: this._compassSource
+                source: this._compassSource,
+                frame: this.headingFrame,
+                anchored: this._anchor.active
             });
         }
 
         this._updateDebugPanel({
             heading: this._currentHeading.toFixed(0) + '°',
-            source: ARNavigationUI._SOURCE_LABELS[this._compassSource] || this._compassSource,
+            source: this._anchor.active
+                ? 'çapa (jiroskop)'
+                : (ARNavigationUI._SOURCE_LABELS[this._compassSource] || this._compassSource),
             conf: confidence.toFixed(2)
         });
 
         this._updateArrows();
+    }
+
+    /**
+     * Çapa kuruluyken gelen manyetik okumayı değerlendirir.
+     *
+     * Heading'i sürmez; kalibrasyon istatistiğini besler ve istenirse jiroskop
+     * kaymasını çok yavaş geri çeker.
+     *
+     * Kayma düzeltmesi mapNorthOffset'e bağımlıdır: manyetik okumayı harita
+     * çerçevesine çevirmek için gereklidir. Mekan offset'i ölçülmeden bu
+     * düzeltme açık edilirse çapa doğru yönden yanlış yöne çekilir; bu yüzden
+     * varsayılan kapalıdır.
+     *
+     * @param {number} magneticHeading - Manyetik kuzey referanslı heading
+     * @param {number} confidence      - Okumanın güvenilirliği (0-1)
+     */
+    _observeMagneticWhileAnchored(magneticHeading, confidence) {
+        if (confidence < ARNavigationUI.HEADING.MIN_CONFIDENCE) return;
+
+        this._recordCalibrationSample(magneticHeading, 0);
+
+        if (!this.anchorDriftCorrection) return;
+        if (this._calibration.quality !== ARNavigationUI.CALIBRATION_QUALITY.GOOD) return;
+        if (confidence < ARNavigationUI.HEADING.LOW_CONFIDENCE) return;
+        if (this._relHeading === null) return;
+
+        const now = Date.now();
+        const dtMs = now - this._anchor.lastDriftAt;
+        if (dtMs <= 0) return;
+        this._anchor.lastDriftAt = now;
+
+        // Manyetik okumayı harita çerçevesine taşı (effectiveTargetAngle'ın tersi)
+        const mapFromCompass = ARNavigationUI._norm360(
+            magneticHeading - this.mapNorthOffset + this.magneticDeclination
+        );
+        const impliedOffset = ARNavigationUI._norm360(mapFromCompass - this._relHeading);
+
+        // En kısa yoldan, saniyede en fazla anchorDriftRateDps kadar yaklaş
+        const diff = ((impliedOffset - this._anchor.offset + 180) % 360 + 360) % 360 - 180;
+        const maxStep = this.anchorDriftRateDps * (dtMs / 1000);
+        const step = Math.max(-maxStep, Math.min(maxStep, diff));
+        this._anchor.offset = ARNavigationUI._norm360(this._anchor.offset + step);
     }
 
     // ================================================================
@@ -1717,24 +1930,54 @@ class ARNavigationUI {
         }
 
         const prevQuality = cal.quality;
-        cal.quality = quality;
+
+        // ── Durum değişimini doğrulat ──
+        // Metrikler eşiğin tam üstünde salındığında (iPhone'da ölçülen tipik
+        // durum: accuracy 11.9-12.3) kalite her kontrolde değişir ve
+        // onCalibrationDegraded/Improved geri çağrıları durmadan tetiklenirdi.
+        // Yeni durum QUALITY_CONFIRM kez üst üste görülmeden kabul edilmez.
+        if (quality !== prevQuality) {
+            if (quality === cal.pendingQuality) cal.pendingCount++;
+            else { cal.pendingQuality = quality; cal.pendingCount = 1; }
+        } else {
+            cal.pendingQuality = null;
+            cal.pendingCount = 0;
+        }
+        const confirmed = quality === prevQuality ||
+                          cal.pendingCount >= T.QUALITY_CONFIRM;
 
         // ── Paneli her değerlendirmede güncelle ──
         // Eskiden yalnızca "POOR'a düştü" ve "yükseldi" dallarında yazılıyordu;
         // ilk değerlendirmede prevQuality daima UNKNOWN olduğu için iyi durumda
         // panel kalıcı olarak boş kalıyordu.
         this._updateDebugPanel({
-            calib: (ARNavigationUI._CALIB_LABELS[quality] || '?') +
-                   ' (σ=' + stdDev.toFixed(1) + '°)'
+            calib: (ARNavigationUI._CALIB_LABELS[confirmed ? quality : prevQuality] || '?') +
+                   ' (σ=' + stdDev.toFixed(1) + '°)' +
+                   (confirmed ? '' : ' →' + (ARNavigationUI._CALIB_LABELS[quality] || '?'))
         });
 
-        if (quality === prevQuality) return;
+        if (!confirmed || quality === prevQuality) return;
+
+        cal.quality = quality;
+        cal.pendingQuality = null;
+        cal.pendingCount = 0;
 
         const detail = { quality, stdDev, jumpRate, iosAccuracy };
-        if (this._isQualityBetter(quality, prevQuality)) {
-            if (prevQuality !== Q.UNKNOWN && this.onCalibrationImproved) {
-                this.onCalibrationImproved(detail);
+
+        // ── İlk ölçüm ──
+        // UNKNOWN'dan çıkmak bir iyileşme değildir. Sıralamada unknown en altta
+        // olduğu için UNKNOWN → POOR geçişi "iyileşme" dalına düşüyor ve oradaki
+        // koruma yüzünden sessizce yutuluyordu; pusula en baştan bozuk olduğunda
+        // kullanıcı hiç uyarılmıyordu. Kapalı mekanda en olası senaryo bu.
+        if (prevQuality === Q.UNKNOWN) {
+            if (quality !== Q.GOOD && this.onCalibrationNeeded) {
+                this.onCalibrationNeeded(detail);
             }
+            return;
+        }
+
+        if (this._isQualityBetter(quality, prevQuality)) {
+            if (this.onCalibrationImproved) this.onCalibrationImproved(detail);
         } else if (this.onCalibrationNeeded) {
             this.onCalibrationNeeded(detail);
         }
